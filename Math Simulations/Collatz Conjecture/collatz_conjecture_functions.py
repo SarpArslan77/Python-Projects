@@ -1,5 +1,5 @@
 
-
+import numpy as np
 
 # Collatz Conjecture Calculation
 def run_collatz_conjecture(step_value: int) -> int:
@@ -24,20 +24,18 @@ def run_collatz_conjecture(step_value: int) -> int:
 def generate_hailstone_sequences(
         start_value: int, 
         end_value: int
-        ) -> tuple[list[list[int]], list[list[int]]]:
+        ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """
     Creates Hailstone Sequences between a start and end value
     Args:
         start_value (int): Starting value for the HS generation
-        end_value (int): Ending value for the HS generation
-        hailstone_numbers (list[list[int]]) : 
-        total_stoppage_time (list[list[int]]) : 
+        end_value (int): Ending value for the HS generation 
     Returns:
-        (list[list[int]], list[list[int]]): List of generated hailstone numbers
-            and list of total steps for each generated hailstone number
+        tuple: Numpy array of generated hailstone numbers,
+            Numpy array of total steps for each generated hailstone number
     """
-    hailstone_numbers: list[list[int]] = []
-    total_stoppage_time: list[list[int]] = []
+    hailstone_numbers: list[np.ndarray] = []
+    total_stoppage_time: list[np.ndarray] = []
 
     for x in range(start_value, end_value + 1):
         current_value = x
@@ -51,8 +49,8 @@ def generate_hailstone_sequences(
             current_sequence.append(current_value)
             current_steps.append(step_count)
         
-        hailstone_numbers.append(current_sequence)
-        total_stoppage_time.append(current_steps)
+        hailstone_numbers.append(np.array(current_sequence, dtype=np.int64))
+        total_stoppage_time.append(np.array(current_steps, dtype=np.int64))
     
     return (hailstone_numbers, total_stoppage_time)
     
