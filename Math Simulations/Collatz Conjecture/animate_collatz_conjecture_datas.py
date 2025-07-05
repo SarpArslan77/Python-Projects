@@ -110,8 +110,8 @@ def plot_all_value(
 
     plt.show()
 
-# Option 3: Logaritmic value of one number
-def log_value_of_one_number(
+# Option 3: Plot Logaritmic value of one number
+def plot_log_value_of_one_number(
         num: int,
         hailstone_numbers: np.ndarray,
         total_stoppage_time: np.ndarray,
@@ -176,7 +176,7 @@ def animate_leading_digit(
     # This will store the counts
     cumulative_counts: np.ndarray = np.zeros(9, dtype=int)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots()
     bars = ax.bar(categories, cumulative_counts, color="skyblue")
     ax.set_ylabel("Leading Digit Count")
     ax.set_xlabel("Digit")
@@ -208,7 +208,7 @@ def animate_leading_digit(
         # Dynamically adjust the y-axis limit to fit the growing bars
         ax.set_ylim(0, max_height * 1.15)
         
-        ax.set_title(f"Leading Digit Distribution between {start_value} and {end_value} (Processing Sequence {start_value + frame})")
+        ax.set_title(f"Leading Digit Distribution Animation between {start_value} and {end_value} (Processing Sequence {start_value + frame})")
 
         # Return the artists that have been modified
         return list(bars) + text_labels
@@ -230,22 +230,75 @@ def animate_leading_digit(
 def plot_all_leading_digit(
         start_value: int,
         end_value: int,
-        hailstone_sequences: list[list[int]]
+        hailstone_numbers: list[list[int]]
 ) -> None:
-    pass
+    """
+    Process hailstone sequences at once and plot the count of their leading digits together
+    Args:
+        start_value: Starting_value for the hailstone sequences
+        end_value: Ending value for the sequences
+        hailstone_numbers: Hailstone Sequences itself
+    """
+    leading_digits_per_sequence: list[list[int]] = [
+        [int(str(num)[0]) for num in sequence] for sequence in hailstone_numbers
+    ]
+    num_sequences = len(leading_digits_per_sequence)
+    categories: list[str] = [str(i) for i in range(1, 10)]
+    cumulative_counts: np.ndarray = np.zeros(9, dtype=int)
+    for i in range(len(leading_digits_per_sequence[:])):
+        current_sequence_digits = leading_digits_per_sequence[i]
+        counts = Counter(current_sequence_digits)
+        for j in range(9):
+            cumulative_counts[j] += counts.get(j+1, 0)
 
+    fig, ax = plt.subplots()
+    bars = ax.bar(categories, cumulative_counts, color="skyblue")
+    ax.set_ylabel("Leading Digit Count")
+    ax.set_xlabel("Digit")
+    ax.grid(axis="y", linestyle="--", alpha=0.7)
+    ax.set_title(f"Leading Digit Distribution between {start_value} and {end_value} at once")
+    ax.set_ylim(0, max(cumulative_counts)*1.1)
+    text_labels = [ax.text(bar.get_x() + bar.get_width()/2.0, 0, "0", ha="center", va="bottom") for bar in bars]
+    for i, bar in enumerate(bars):
+        height = cumulative_counts[i]
+        bar.set_height(height)
+        text_labels[i].set_text(f"{height}")
+        text_labels[i].set_y(height)
 
+    plt.tight_layout()
+    plt.show()
 
+# Option 6: Plot each sequences highest reached number
+def plot_highest_reached_number(
+        start_value: int,
+        end_value: int,
+        hailstone_numbers: list[list[int]]
+) -> None:
+    """
+    Plot the highst reached number for each sequence on a scatter plot
+    Args:
+        start_value: Starting_value for the hailstone sequences
+        end_value: Ending value for the sequences
+        hailstone_numbers: Hailstone Sequences itself
+    """
+    max_reached_numbers: list[int] = [
+        max(single_sequence) for single_sequence in hailstone_numbers
+        ]
+    
+    fig, ax = plt.subplots()
+    ax.set_xlabel("Number")
+    ax.set_ylabel("Maximum Reached Number")
+    ax.set_title(f" Maximum Reached Number for each Sequence between {start_value} and {end_value}")
+    ax.grid(True)
 
+    x_numbers = list(range(start_value, end_value+1))
 
+    scatter = ax.scatter(
+        x_numbers,
+        max_reached_numbers,
+        color = "b",
+        s=10
+    )
+    mplcursors.cursor(scatter)
 
-
-
-
-
-
-
-
-
-
-
+    plt.show()
