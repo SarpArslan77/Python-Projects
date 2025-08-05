@@ -1,7 +1,9 @@
 
-#TODO: it shows 100 % Accuracy and 0.0 Loss, which is obviously false
+#TODO: fix precision. the total count of each emotion is 0, so it causes problem for the division
+#TODO:      all guesses are 3?
 
 import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -49,20 +51,66 @@ print("\nStarting with the Test.")
 model.eval()
 with torch.no_grad(): 
 # We use torch.no_grad() to save memory and computations, as we don't need gradients here
-    n_correct: int = 0
-    n_samples: int = 0
+    total_n_correct: int = 0
+    total_n_samples: int = 0
+    # TP: True Positive, TN: True Negative, FP: False Positive, FN: False Negative
+    emotion_counts: list = [
+        [0 for _ in range(2)] for _ in range(7)
+    ] # Is built like: [[TP_angry, angry_count], [TP_disgust, disgust_count], ...]
+
     for images, labels in test_loader:
         images = images.reshape(-1, 48*48).to(device)
-        labels = labels.to(device)
+        labels = labels.to(device) # Shape: (512)
         outputs = model(images)
 
         _, predicted = torch.max(outputs.data, 1)
 
-        n_samples += labels.size(0)
-        n_correct += (predicted == labels).sum().item()
-    
-    accuracy = 100 * n_correct/n_samples
-    print(f"Accuracy on the test set: {accuracy:.2f} %")
+        # Calculate the overall accuracy. 
+        total_n_samples += labels.size(0)
+        total_n_correct += (predicted == labels).sum().item()
+
+        # Calculate the precision for each emotion.
+        emotion_counts[0][0] += (labels == 0).sum().item()
+        emotion_counts[0][1] += (predicted == 0).sum().item()
+        emotion_counts[1][0] += (labels == 1).sum().item()
+        emotion_counts[1][1] += (predicted == 1).sum().item()
+        emotion_counts[2][0] += (labels == 2).sum().item()
+        emotion_counts[2][1] += (predicted == 2).sum().item()
+        emotion_counts[3][0] += (labels == 3).sum().item()
+        emotion_counts[3][1] += (predicted == 3).sum().item()
+        emotion_counts[4][0] += (labels == 4).sum().item()
+        emotion_counts[4][1] += (predicted == 4).sum().item()
+        emotion_counts[5][0] += (labels == 5).sum().item()
+        emotion_counts[5][1] += (predicted == 5).sum().item()
+        emotion_counts[6][0] += (labels == 6).sum().item()
+        emotion_counts[6][1] += (predicted == 6).sum().item()
+        
+        """print(emotion_counts[0][1])
+        print(emotion_counts[1][1])
+        print(emotion_counts[2][1])
+        print(emotion_counts[3][1])
+        print(emotion_counts[4][1])
+        print(emotion_counts[5][1])
+        print(emotion_counts[6][1])"""
+
+    accuracy = round(total_n_correct/total_n_samples * 100, 2)
+    print(f"\nOverall accuracy on the test set: {accuracy} %")
+
+    precision_angry: float = round(emotion_counts[0][0] / emotion_counts[0][1], 2)
+    precision_disgust: float = round(emotion_counts[1][0] / emotion_counts[1][1], 2)
+    precision_fear: float = round(emotion_counts[2][0] / emotion_counts[2][1], 2)
+    precision_happy: float = round(emotion_counts[3][0] / emotion_counts[3][1], 2)
+    precision_neutral: float = round(emotion_counts[4][0] / emotion_counts[4][1], 2)
+    precision_sad: float = round(emotion_counts[5][0] / emotion_counts[5][1], 2)
+    precision_surprise: float = round(emotion_counts[6][0] / emotion_counts[6][1], 2)
+    print(f"\nPrecision on the Emotions:")
+    print(f"angry: {precision_angry} %")
+    print(f"disgust: {precision_disgust} %")
+    print(f"fear: {precision_fear} %")
+    print(f"happy: {precision_happy} %")
+    print(f"neutral: {precision_neutral} %")
+    print(f"sad: {precision_sad} %")
+    print(f"surprise: {precision_surprise} %")
 
 
 
