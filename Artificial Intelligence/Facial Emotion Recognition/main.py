@@ -1,6 +1,4 @@
 
-#TODO: fix precision. the total count of each emotion is 0, so it causes problem for the division
-#TODO:      all guesses are 3?
 
 import cv2
 import numpy as np
@@ -70,28 +68,29 @@ with torch.no_grad():
         total_n_correct += (predicted == labels).sum().item()
 
         # Calculate the precision for each emotion.
-        emotion_counts[0][0] += (labels == 0).sum().item()
+        emotion_counts[0][0] += torch.logical_and(labels == 0, predicted == 0).sum().item()
         emotion_counts[0][1] += (predicted == 0).sum().item()
-        emotion_counts[1][0] += (labels == 1).sum().item()
+        emotion_counts[1][0] += torch.logical_and(labels == 1, predicted == 1).sum().item()
         emotion_counts[1][1] += (predicted == 1).sum().item()
-        emotion_counts[2][0] += (labels == 2).sum().item()
+        emotion_counts[2][0] += torch.logical_and(labels == 2, predicted == 2).sum().item()
         emotion_counts[2][1] += (predicted == 2).sum().item()
-        emotion_counts[3][0] += (labels == 3).sum().item()
+        emotion_counts[3][0] += torch.logical_and(labels == 3, predicted == 3).sum().item()
         emotion_counts[3][1] += (predicted == 3).sum().item()
-        emotion_counts[4][0] += (labels == 4).sum().item()
+        emotion_counts[4][0] += torch.logical_and(labels == 4, predicted == 4).sum().item()
         emotion_counts[4][1] += (predicted == 4).sum().item()
-        emotion_counts[5][0] += (labels == 5).sum().item()
+        emotion_counts[5][0] += torch.logical_and(labels == 5, predicted == 5).sum().item()
         emotion_counts[5][1] += (predicted == 5).sum().item()
-        emotion_counts[6][0] += (labels == 6).sum().item()
+        emotion_counts[6][0] += torch.logical_and(labels == 6, predicted == 6).sum().item()
         emotion_counts[6][1] += (predicted == 6).sum().item()
         
-        """print(emotion_counts[0][1])
+        print(emotion_counts[0][1])
         print(emotion_counts[1][1])
         print(emotion_counts[2][1])
         print(emotion_counts[3][1])
         print(emotion_counts[4][1])
         print(emotion_counts[5][1])
-        print(emotion_counts[6][1])"""
+        print(emotion_counts[6][1])
+        print()
 
     accuracy = round(total_n_correct/total_n_samples * 100, 2)
     print(f"\nOverall accuracy on the test set: {accuracy} %")
