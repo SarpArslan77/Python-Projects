@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 device = torch.device("xpu" if torch.xpu.is_available() else "cpu")
-print(f"\nUsing device: {device}") # <-- ADD THIS LINE
+print(f"\nUsing device: {device}") 
 
 # Hyperparameters
 LEARNING_RATE: float = 1e-3
@@ -71,3 +71,4 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     factor = 0.1, # By which the learning rate will be reduced.
     patience = 3, # Number of epochs with no improvement after which learning rate will be reduced
 )
+
