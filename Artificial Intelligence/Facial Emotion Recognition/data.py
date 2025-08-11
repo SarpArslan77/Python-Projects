@@ -8,10 +8,10 @@ import torchvision.transforms as T
 TRAINING_READ_FILE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/train"
 TEST_READ_FILE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/test"
 
-BATCH_SIZE: int = 512
+BATCH_SIZE: int = 64
 
 # Apply slight randomizations on the images to create very similar, but not same datas.
-training_pipeline = T.Compose(
+train_pipeline = T.Compose(
     [ 
         # Convert all images to 1-channel grayscale.
         T.Grayscale(num_output_channels=1),
@@ -25,6 +25,8 @@ training_pipeline = T.Compose(
         T.RandomPerspective(distortion_scale=0.2, p=0.4),
         # Randomly change the brightness and contrast of the image.
         T.ColorJitter(brightness=0.3, contrast=0.3),
+        # Determine the size to 48 x 48.
+        T.Resize((48, 48)),
         # Always end with converting to tensor and normalizing.
         T.ToTensor(), # Converts to [0, 1] range and shape [C, H, W]
         # Randomly erase a rectangular regions in the image.
@@ -34,10 +36,20 @@ training_pipeline = T.Compose(
     ]
 )
 
+# Define a seperate pipeline for testing.
+test_pipeline = T.Compose(
+    [
+        T.Grayscale(num_output_channels=1),
+        T.Resize((48, 48)),
+        T.ToTensor(),
+        T.Normalize(mean=(0.5,), std=(0.5,),),
+    ]
+)
+
 # Load the Dataset using ImageFolder with pipeline
 train_dataset = torchvision.datasets.ImageFolder(
     root = TRAINING_READ_FILE_PATH,
-    transform = training_pipeline,
+    transform = train_pipeline,
 )
 
 # bincount function can only search in tensors.
@@ -66,15 +78,6 @@ train_loader = DataLoader(
     sampler = sampler, # The sampler handles the shuffling logic.
 )
 
-# Define a seperate pipeline for testing.
-test_pipeline = T.Compose(
-    [
-        T.Grayscale(num_output_channels=1),
-        T.ToTensor(),
-        T.Normalize(mean=(0.5,), std=(0.5,),),
-    ]
-)
-
 # Repeat the creating dataset for test files.
 full_test_dataset = torchvision.datasets.ImageFolder(
     root = TEST_READ_FILE_PATH,
@@ -100,3 +103,5 @@ val_loader = DataLoader(
     batch_size = BATCH_SIZE,
     shuffle = False,
 )
+
+
