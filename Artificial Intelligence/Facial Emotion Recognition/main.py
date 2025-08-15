@@ -1,10 +1,13 @@
 
-import cv2
-import numpy as np
+
+
 import torch
-import torch.nn as nn
 from sklearn.metrics import classification_report
 import intel_extension_for_pytorch as ipex
+import matplotlib.pyplot as plt
+import mplcursors
+import os
+from datetime import datetime
 
 from data import (
     test_loader,
@@ -20,13 +23,15 @@ from cnn import (
 )
 
 # Hyperparameters
-NUM_EPOCHS: int = 50
+NUM_EPOCHS: int = 2
 
 # Apply IPEX optimizations to the model and optimizer
 model, optimizer = ipex.optimize(model, optimizer=optimizer)
 
 # Training Loop
 print("\nStarting Training!")
+train_acc_tracker: list[float] = []
+val_acc_tracker: list[float] = []
 for epoch in range(NUM_EPOCHS):
     print(f"\nEpoch : {epoch+1}/{NUM_EPOCHS}")
     model.train()
@@ -56,7 +61,8 @@ for epoch in range(NUM_EPOCHS):
 
     train_acc: float = 100.0 * n_correct / n_total
     epoch_train_loss: float = running_loss / len(train_loader.dataset)
-    print(f"\nTrain accuracy : {train_acc:.2f}% | Train Loss: {epoch_train_loss:.4f}")
+    print(f"    Train accuracy : {train_acc:.2f}% | Train Loss: {epoch_train_loss:.4f}")
+    train_acc_tracker.append(train_acc)
 
     # Validation Phase
     model.eval()
@@ -76,21 +82,73 @@ for epoch in range(NUM_EPOCHS):
     
     val_acc: float = 100.0 * val_correct / val_total
     epoch_val_loss: float = val_loss / len(val_loader.dataset)
-    print(f"Validation accuracy : {val_acc:.2f}% | Val Loss: {epoch_val_loss:.4f}")
+    print(f"    Validation accuracy : {val_acc:.2f}% | Val Loss: {epoch_val_loss:.4f}")
+    val_acc_tracker.append(val_acc)
 
     # Step the scheduler with validation loss
     scheduler.step(epoch_val_loss)
-
 print("\nFinished Training.")
 
-#! Unmark these part, whenever you want to override and save the model parameters.
+# Create a graph for tracking the training accuracy and learning_rate
+fig, ax = plt.subplots()
 
-# Save the model parameters, also weights and biases.
-MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/trained_model.pth"
-# Save the state_dict.
-torch.save(model.state_dict(), MODEL_SAVE_PATH)
-print(f"Saved the model parameters.")
+# Training accuracy
+line_train, = ax.plot(
+    train_acc_tracker,
+    color = "red",
+)
+# Validation accuracy
+line_val, = ax.plot(
+    val_acc_tracker,
+    color = "blue"
+)
 
+# Plot settings
+ax.set_title("Training & Validation Accuracy Progression")
+ax.set_xlabel("Epoch")
+ax.set_ylabel("Accuracy")
+ax.grid(True)
+ax.legend(
+    [line_train, line_val], 
+    ["Training Accuracy", "Validation Accuracy"], 
+    loc = "lower right",
+)
+
+# Add interactive cursor
+mplcursors.cursor(line_train)
+mplcursors.cursor(line_val)
+
+#! Unmark these part, whenever you not want to save the model parameters and accuracy graph.
+
+
+# Create a Timestamped directory for saving
+
+# Get the current date and time.
+now = datetime.now()
+
+# Format the timestamp for the directory name: e.g. "12/08/2025_10:30"
+new_dir_name: str = now.strftime("%d-%m-%Y_%H-%M")
+
+# Create the new directory path.
+MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/Runs/"
+new_dir_path: str = os.path.join(MODEL_SAVE_PATH, new_dir_name)
+
+# Create the directory.
+os.makedirs(new_dir_path,)
+print(f"\nDirectory {new_dir_name} created succesfully.")
+
+# Define the file paths within the new directory.
+model_parameters_path = os.path.join(new_dir_path, "model_parameters.pth")
+acc_graph_path = os.path.join(new_dir_path, "accuracy_graph.png")
+
+# Save the model's state_dict.
+torch.save(model.state_dict(), model_parameters_path)
+# Save the Matplotlib.graph.
+plt.savefig(acc_graph_path)
+
+
+# plt.show has to be here, because it resets the canvas after its closed.
+plt.show()
 
 emotion_labels: list[str] = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 
@@ -130,6 +188,14 @@ with torch.no_grad():
     )
     print("\nClassification Report: ")
     print(report)
+
+    # Save the report as .txt file to the newly created directory.
+    report_path: str = os.path.join(new_dir_path, "classification_report.txt")
+    with open(report_path, "w") as f:
+        f.write("Classification Report:\n")
+        f.write("\n")
+        f.write(report)
+    print("\nReport also saved in the new directory.")
 
 # Camera implementation
 """
