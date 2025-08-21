@@ -2,8 +2,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-device = torch.device("xpu" if torch.xpu.is_available() else "cpu")
-print(f"\nUsing device: {device}") # <-- ADD THIS LINE
+# Check whether Intel XE GPU is avaiable, if not use the CPU
+try:
+    device = torch.device("xpu") 
+except:
+    device = torch.device("cpu") 
+print(f"\nUsing device: {device}") 
 
 # Hyperparameters
 LEARNING_RATE: float = 1e-3
@@ -16,37 +20,37 @@ class ConvNet(nn.Module):
         self.conv_layer1 = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(kernel_size=2, stride=2) # Output shape: (32, 24, 24)
         )
         self.conv_layer2 = nn.Sequential(
             nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2) # Output shape: (64, 24, 24)
+            nn.MaxPool2d(kernel_size=2, stride=2) # (64, 12, 12)
         )
+        #! Currently not in use.
         self.conv_layer3 = nn.Sequential(
             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(kernel_size=2, stride=2) # (128, 6, 6)
         )
         #! Currently not in use.
         self.conv_layer4 = nn.Sequential( 
             nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(kernel_size=2, stride=2) # (128, 6, 6)
         )
 
-        # After two max pools, the 48x48 image is now 3x3
+        # After two max pools, the 48x48 image is now 12x12
         self.fc_layer = nn.Sequential(
-            nn.Linear(in_features=128*6*6, out_features=256),
+            nn.Linear(in_features=64*12*12, out_features=256),
             nn.ReLU(),
-            nn.Dropout(),
+            #! nn.Dropout(),
             nn.Linear(in_features=256, out_features=num_class),
         )
 
     def forward(self, x):
         x = self.conv_layer1(x)
         x = self.conv_layer2(x)
-        x = self.conv_layer3(x)
         x = x.view(x.size(0), -1)
 
         return self.fc_layer(x)
