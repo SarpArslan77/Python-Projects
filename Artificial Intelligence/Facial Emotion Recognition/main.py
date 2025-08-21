@@ -13,6 +13,7 @@ from data import (
     test_loader,
     train_loader,
     val_loader,
+    BATCH_SIZE,
 )
 from cnn import (
     device,
@@ -20,16 +21,18 @@ from cnn import (
     criterion,
     optimizer,
     scheduler,
+    STARTING_LEARNING_RATE,
 )
 
 # Hyperparameters
-NUM_EPOCHS: int = 100
+NUM_EPOCHS: int = 1
 
 # Apply IPEX optimizations to the model and optimizer
 model, optimizer = ipex.optimize(model, optimizer=optimizer)
 
 # Training Loop
 print("\nStarting Training!")
+training_start_time = datetime.now()
 # Tracking parameters for the graph.
 train_acc_tracker: list[float] = []
 val_acc_tracker: list[float] = []
@@ -110,6 +113,13 @@ for epoch in range(NUM_EPOCHS):
     # Step the scheduler with validation loss
     scheduler.step(epoch_val_loss)
 print("\nFinished Training.")
+# Calculate the training time.
+training_end_time = datetime.now()
+elapsed_seconds = (training_end_time - training_start_time).total_seconds()
+seconds = elapsed_seconds % 60
+minutes = (elapsed_seconds % 3600) // 60
+hours = elapsed_seconds // 3600
+print(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s")
 
 # Create a graph for tracking the accuracy, loss and learning rate.
 fig, (ax_acc, ax_loss, ax_lr) = plt.subplots(1, 3, figsize=(18, 5))
@@ -219,15 +229,14 @@ mplcursors.cursor(line_lr)
 # Create a Timestamped directory for saving
 
 # Get the current date and time.
-now = datetime.now()
+dir_creation_time = datetime.now()
 
 # Format the timestamp for the directory name: e.g. "12/08/2025_10:30"
-new_dir_name: str = now.strftime("%d-%m-%Y_%H-%M")
+new_dir_name: str = dir_creation_time.strftime("%d-%m-%Y_%H-%M")
 
 # Create the new directory path.
 MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/Runs/"
 new_dir_path: str = os.path.join(MODEL_SAVE_PATH, new_dir_name)
-
 
 try: # Create a new directory.
     os.makedirs(new_dir_path,)
@@ -259,7 +268,7 @@ else:
         print("The Graph doesn't have the necessary permissions to write to that file.")
 
 # plt.show has to be here, because it resets the canvas after its closed.
-#! plt.show()
+# plt.show()
 
 emotion_labels: list[str] = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 # Track all the model predictions and correct labels.
@@ -300,12 +309,48 @@ with torch.no_grad():
     print("\nClassification Report: ")
     print(report)
 
+    # Track all the layers for the summary.
+    layer_rankings: list[str] = []
+    for name, module in model.named_modules():
+        layer_type = type(module).__name__
+        layer_rankings.append(layer_type)
+    # Get the name of the optimizer, scheduler and loss function used for the cnn.
+    optimizer_type = type(optimizer).__name__
+    loss_function_type = type(criterion).__name__
+    scheduler_type = type(scheduler).__name__
+
     try: # Save the report as .txt file to the newly created directory.
-        report_path: str = os.path.join(new_dir_path, "classification_report.txt")
+        report_path: str = os.path.join(new_dir_path, "summary.txt")
         with open(report_path, "w") as f:
             f.write("Classification Report:\n")
             f.write("\n")
             f.write(report)
+            f.write(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s, on device: {device}\n")
+            f.write("\nParameters are:\n")
+            f.write(f" - Number of epochs: {NUM_EPOCHS}\n")
+            f.write(f" - Batch size: {BATCH_SIZE}\n")
+            f.write(f" - Started with the learning rate {STARTING_LEARNING_RATE} and ended with {new_lr}\n")
+            f.write(f" - Best performing model at epoch {best_model_epoch} with accuracy {best_model_acc:.2f}% and loss {best_model_loss:.4f}\n")
+            f.write("\n")
+            # Write the layer structure.
+            layer_count: int = 1
+            for i, layer_name in enumerate(layer_rankings):
+                # First layer is the module name, write it with its properties.
+                if i == 0:
+                    f.write(f"Class {layer_name}:")
+                    f.write(f"\n - Optimizer: {optimizer_type}")
+                    f.write(f"\n - Loss Function: {loss_function_type}")
+                    f.write(f"\n - Scheduler: {scheduler_type}")
+                    f.write("\n")
+                # Sequential marks the beginning of a new layer.
+                elif layer_name == "Sequential":
+                    f.write(f"\nLayer {layer_count}:")
+                    layer_count += 1
+                    f.write("\n ")
+                else: 
+                    f.write(f" -> {layer_name}")
+            f.write("\n\n")
+
         print("\nReport also saved in the new directory.")
     except FileNotFoundError:
         print("File couldn't be found, so the saving of the report was unsuccesful.")
