@@ -10,7 +10,7 @@ except:
 print(f"\nUsing device: {device}") 
 
 # Hyperparameters
-LEARNING_RATE: float = 1e-3
+STARTING_LEARNING_RATE: float = 5e-4
 
 class ConvNet(nn.Module):
     def __init__(self, num_class: int = 7) -> None:
@@ -27,40 +27,35 @@ class ConvNet(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2) # (64, 12, 12)
         )
-        #! Currently not in use.
         self.conv_layer3 = nn.Sequential(
             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2) # (128, 6, 6)
-        )
-        #! Currently not in use.
-        self.conv_layer4 = nn.Sequential( 
-            nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2) # (128, 6, 6)
         )
 
         # After two max pools, the 48x48 image is now 12x12
         self.fc_layer = nn.Sequential(
-            nn.Linear(in_features=64*12*12, out_features=256),
+            nn.Linear(in_features=128*6*6, out_features=256),
             nn.ReLU(),
-            #! nn.Dropout(),
+            nn.Dropout(),
             nn.Linear(in_features=256, out_features=num_class),
         )
 
     def forward(self, x):
         x = self.conv_layer1(x)
         x = self.conv_layer2(x)
+        x = self.conv_layer3(x)
         x = x.view(x.size(0), -1)
 
         return self.fc_layer(x)
+    
     
 # Convolutional Neural Network implementation
 model = ConvNet().to(device)
 
 # Define Loss Function and Optimizer
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+optimizer = optim.Adam(model.parameters(), lr=STARTING_LEARNING_RATE)
 
 # Scheduler Definition
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -68,4 +63,7 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(
     mode = "min", # It will look for the metric to stop decreasing.
     factor = 0.1, # By which the learning rate will be reduced.
     patience = 3, # Number of epochs with no improvement after which learning rate will be reduced.
+    min_lr = 1e-4, # Minimum learning rate, that the optimizer can drop to.
 )
+
+
