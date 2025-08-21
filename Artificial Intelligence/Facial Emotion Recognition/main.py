@@ -1,6 +1,4 @@
 
-
-
 import torch
 from sklearn.metrics import classification_report
 import intel_extension_for_pytorch as ipex
@@ -8,6 +6,8 @@ import matplotlib.pyplot as plt
 import mplcursors
 import os
 from datetime import datetime
+import numpy as np
+import copy
 
 from data import (
     test_loader,
@@ -23,15 +23,24 @@ from cnn import (
 )
 
 # Hyperparameters
-NUM_EPOCHS: int = 2
+NUM_EPOCHS: int = 100
 
 # Apply IPEX optimizations to the model and optimizer
 model, optimizer = ipex.optimize(model, optimizer=optimizer)
 
 # Training Loop
 print("\nStarting Training!")
+# Tracking parameters for the graph.
 train_acc_tracker: list[float] = []
 val_acc_tracker: list[float] = []
+train_loss_tracker: list[float] = []
+val_loss_tracker: list[float] = []
+lr_tracker: list[float] = []
+# Track the best model with the lowest validation loss.
+lowest_val_loss: float = np.inf
+best_model_parameters = np.nan
+# Stores the epoch, val_acc and val_loss for the best model, to be marked in the graph.
+best_model_val_values: list = [np.nan, np.nan, np.nan] # [epoch, val_acc, val_loss]
 for epoch in range(NUM_EPOCHS):
     print(f"\nEpoch : {epoch+1}/{NUM_EPOCHS}")
     model.train()
@@ -63,6 +72,7 @@ for epoch in range(NUM_EPOCHS):
     epoch_train_loss: float = running_loss / len(train_loader.dataset)
     print(f"    Train accuracy : {train_acc:.2f}% | Train Loss: {epoch_train_loss:.4f}")
     train_acc_tracker.append(train_acc)
+    train_loss_tracker.append(epoch_train_loss)
 
     # Validation Phase
     model.eval()
@@ -84,42 +94,127 @@ for epoch in range(NUM_EPOCHS):
     epoch_val_loss: float = val_loss / len(val_loader.dataset)
     print(f"    Validation accuracy : {val_acc:.2f}% | Val Loss: {epoch_val_loss:.4f}")
     val_acc_tracker.append(val_acc)
+    val_loss_tracker.append(epoch_val_loss)
+
+    # Save the learning rate from the optimizer.
+    new_lr: float = optimizer.param_groups[0]["lr"]
+    print(f"    Learning Rate: {new_lr}")
+    lr_tracker.append(new_lr)
+
+    # Update the best model and validation loss if the new model is better.
+    if epoch_val_loss < lowest_val_loss:
+        lowest_val_loss = epoch_val_loss
+        best_model_parameters = copy.deepcopy(model.state_dict())
+        best_model_val_values = [epoch, val_acc, epoch_val_loss]
 
     # Step the scheduler with validation loss
     scheduler.step(epoch_val_loss)
 print("\nFinished Training.")
 
-# Create a graph for tracking the training accuracy and learning_rate
-fig, ax = plt.subplots()
+# Create a graph for tracking the accuracy, loss and learning rate.
+fig, (ax_acc, ax_loss, ax_lr) = plt.subplots(1, 3, figsize=(18, 5))
 
+# Unpack the best model values for the graph marking.
+best_model_epoch = best_model_val_values[0]
+best_model_acc = best_model_val_values[1]
+best_model_loss = best_model_val_values[2]
+
+# First create for the both accuracy.
 # Training accuracy
-line_train, = ax.plot(
+line_train_acc, = ax_acc.plot(
     train_acc_tracker,
     color = "red",
 )
 # Validation accuracy
-line_val, = ax.plot(
+line_val_acc, = ax_acc.plot(
     val_acc_tracker,
     color = "blue"
 )
 
-# Plot settings
-ax.set_title("Training & Validation Accuracy Progression")
-ax.set_xlabel("Epoch")
-ax.set_ylabel("Accuracy")
-ax.grid(True)
-ax.legend(
-    [line_train, line_val], 
+# Add the star marking for the best model.
+ax_acc.plot(
+    best_model_epoch,
+    best_model_acc,
+    marker = "*", 
+    # marker argument tells the .plot function, which automatically draws lines,
+    #   to draw only one point in the graph.
+    color = "gold",
+    markersize = 12,
+    markeredgecolor = "black",
+    markeredgewidth = 1,
+    label = "Best Model Accuracy"
+)
+
+# Accuracy plot settings
+ax_acc.set_title("Training & Validation Accuracy Progression")
+ax_acc.set_xlabel("Epoch")
+ax_acc.set_ylabel("Accuracy")
+ax_acc.grid(True)
+ax_acc.legend(
+    [line_train_acc, line_val_acc], 
     ["Training Accuracy", "Validation Accuracy"], 
     loc = "lower right",
 )
 
 # Add interactive cursor
-mplcursors.cursor(line_train)
-mplcursors.cursor(line_val)
+mplcursors.cursor(line_train_acc)
+mplcursors.cursor(line_val_acc)
+
+# Repeat for loss.
+line_train_loss, = ax_loss.plot(
+    train_loss_tracker,
+    color = "red",
+    linestyle="--",
+)
+line_val_loss, = ax_loss.plot(
+    val_loss_tracker,
+    color = "blue",
+    linestyle = "--",
+)
+
+ax_loss.plot(
+    best_model_epoch,
+    best_model_loss,
+    marker = "*",
+    color = "gold",
+    markersize = 12,
+    markeredgecolor = "black",
+    markeredgewidth = 1,
+    label = "Best Model Loss"
+)
+
+ax_loss.set_title("Training & Validation Loss Progression")
+ax_loss.set_xlabel("Epoch")
+ax_loss.set_ylabel("Loss")
+ax_loss.grid(True)
+ax_loss.legend(
+    [line_train_loss, line_val_loss], 
+    ["Training Loss", "Validation Loss"], 
+    loc = "upper right",
+)
+
+mplcursors.cursor(line_train_loss)
+mplcursors.cursor(line_val_loss)
+
+# Repeat for learning rate.
+line_lr, = ax_lr.plot(
+    lr_tracker,
+    color = "orange",
+)
+
+ax_lr.set_title("Learning Rate Progression")
+ax_lr.set_xlabel("Epoch")
+ax_lr.set_ylabel("Learning Rate")
+ax_lr.grid(True)
+ax_lr.legend(
+    [line_lr],
+    ["Learning Rate"],
+    loc = "upper right",
+)
+
+mplcursors.cursor(line_lr)
 
 #! Unmark these part, whenever you not want to save the model parameters and accuracy graph.
-
 
 # Create a Timestamped directory for saving
 
@@ -133,25 +228,41 @@ new_dir_name: str = now.strftime("%d-%m-%Y_%H-%M")
 MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/Runs/"
 new_dir_path: str = os.path.join(MODEL_SAVE_PATH, new_dir_name)
 
-# Create the directory.
-os.makedirs(new_dir_path,)
-print(f"\nDirectory {new_dir_name} created succesfully.")
 
-# Define the file paths within the new directory.
-model_parameters_path = os.path.join(new_dir_path, "model_parameters.pth")
-acc_graph_path = os.path.join(new_dir_path, "accuracy_graph.png")
+try: # Create a new directory.
+    os.makedirs(new_dir_path,)
+    print(f"\nDirectory {new_dir_name} created succesfully.")
+except PermissionError:
+    print("New directory creation doesn't have the necessary permissions to write to that file.")
+except FileExistsError:
+    print("A Directory with an exact name exists.")
+else:
+    # This else-block only runs if the directory was created successfully.
 
-# Save the model's state_dict.
-torch.save(model.state_dict(), model_parameters_path)
-# Save the Matplotlib.graph.
-plt.savefig(acc_graph_path)
+    # Define the file paths within the new directory.
+    best_model_parameters_path = os.path.join(new_dir_path, "best_model_parameters.pth")
+    last_model_parameters_path = os.path.join(new_dir_path, "last_model_parameters.pth")
+    acc_graph_path = os.path.join(new_dir_path, "acc_loss_lr_graph.png")
 
+    try: # Save the model's best state_dict.
+        torch.save(best_model_parameters, best_model_parameters_path)
+    except PermissionError:
+        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
+    try: # Save the model's last state.
+        torch.save(model.state_dict(), last_model_parameters_path)
+    except PermissionError:
+        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
+
+    try: # Save the Matplotlib.graph.
+        plt.savefig(acc_graph_path)
+    except PermissionError:
+        print("The Graph doesn't have the necessary permissions to write to that file.")
 
 # plt.show has to be here, because it resets the canvas after its closed.
-plt.show()
+#! plt.show()
 
 emotion_labels: list[str] = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
-
+# Track all the model predictions and correct labels.
 all_predictions: list = []
 all_labels: list = []
 
@@ -189,13 +300,15 @@ with torch.no_grad():
     print("\nClassification Report: ")
     print(report)
 
-    # Save the report as .txt file to the newly created directory.
-    report_path: str = os.path.join(new_dir_path, "classification_report.txt")
-    with open(report_path, "w") as f:
-        f.write("Classification Report:\n")
-        f.write("\n")
-        f.write(report)
-    print("\nReport also saved in the new directory.")
+    try: # Save the report as .txt file to the newly created directory.
+        report_path: str = os.path.join(new_dir_path, "classification_report.txt")
+        with open(report_path, "w") as f:
+            f.write("Classification Report:\n")
+            f.write("\n")
+            f.write(report)
+        print("\nReport also saved in the new directory.")
+    except FileNotFoundError:
+        print("File couldn't be found, so the saving of the report was unsuccesful.")
 
 # Camera implementation
 """
