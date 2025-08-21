@@ -15,16 +15,16 @@ train_pipeline = T.Compose(
     [ 
         # Convert all images to 1-channel grayscale.
         T.Grayscale(num_output_channels=1),
-        # Flip 50 % of the images horizontally.
-        T.RandomHorizontalFlip(p=0.5),
-        # Rotate the images by a random angle between -20 and +20 degrees.
-        T.RandomRotation(degrees=10),
+        # Flip 90 % of the images horizontally.
+        T.RandomHorizontalFlip(p=0.9),
+        # Rotate the images by a random angle between -45 and +45 degrees.
+        T.RandomRotation(degrees=45),
         # Randomly zooms in on the image between 80 % and 120 %
         #? T.RandomAffine(degrees=0, scale=(0.8, 1.2), shear=10),
         # Apply a random perspective(shearing) transformation for % 40 of the time.
         #? T.RandomPerspective(distortion_scale=0.2, p=0.4),
         # Randomly change the brightness and contrast of the image.
-        T.ColorJitter(brightness=0.3, contrast=0.3),
+        T.ColorJitter(brightness=0.5, contrast=0.5),
         # Determine the size to 48 x 48.
         T.Resize((48, 48)),
         # Always end with converting to tensor and normalizing.
@@ -58,7 +58,6 @@ except:
 
 # bincount function can only search in tensors.
 targets = torch.tensor(train_dataset.targets)
-
 
 # We will create a custom sampler for training, since the dataset is unbalanced.
 
