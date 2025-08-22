@@ -1,6 +1,10 @@
 
+#! Fix the new custom dataset, it broke the code.
+#TODO Create a custom dataloader, in order to use the data augmentation only on disgust.
+#TODO Try to optimize the training, make it faster
+
 import torch
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, confusion_matrix
 import intel_extension_for_pytorch as ipex
 import matplotlib.pyplot as plt
 import mplcursors
@@ -8,6 +12,7 @@ import os
 from datetime import datetime
 import numpy as np
 import copy
+import seaborn as sns
 
 from data import (
     test_loader,
@@ -25,7 +30,7 @@ from cnn import (
 )
 
 # Hyperparameters
-NUM_EPOCHS: int = 1
+NUM_EPOCHS: int = 10
 
 # Apply IPEX optimizations to the model and optimizer
 model, optimizer = ipex.optimize(model, optimizer=optimizer)
@@ -122,7 +127,7 @@ hours = elapsed_seconds // 3600
 print(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s")
 
 # Create a graph for tracking the accuracy, loss and learning rate.
-fig, (ax_acc, ax_loss, ax_lr) = plt.subplots(1, 3, figsize=(18, 5))
+fig, ((ax_acc, ax_loss) , (ax_lr, ax_cm)) = plt.subplots(2, 2, figsize=(10, 10))
 
 # Unpack the best model values for the graph marking.
 best_model_epoch = best_model_val_values[0]
@@ -267,9 +272,6 @@ else:
     except PermissionError:
         print("The Graph doesn't have the necessary permissions to write to that file.")
 
-# plt.show has to be here, because it resets the canvas after its closed.
-# plt.show()
-
 emotion_labels: list[str] = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 # Track all the model predictions and correct labels.
 all_predictions: list = []
@@ -301,13 +303,37 @@ with torch.no_grad():
     print(f"\nAccuracy of the network is: {accuracy:.2f} %")
 
     # This report includes precision, recall and f1-score for each class.
-    report = classification_report(
+    classification_report_summary = classification_report(
         all_labels,
         all_predictions,
         target_names=emotion_labels,
     )
-    print("\nClassification Report: ")
-    print(report)
+    print("\nClassification Report:\n")
+    print(classification_report_summary)
+
+    # Create the confusion matrix, to see which emotions are between each are confused by the model.
+    confusion_matrix_report = confusion_matrix(all_labels, all_predictions)
+    # Add the cm to the graphs.
+    sns.heatmap(
+        confusion_matrix_report,
+        annot = True, # Display the number in each cell.
+        fmt = "d", # Format the numbers as integers.
+        cmap = "Blues", # Use Red-And-Blue colormap.
+        xticklabels = emotion_labels,
+        yticklabels = emotion_labels,
+        ax = ax_cm,
+    )
+
+    ax_cm.set_title("Confusion Matrix")
+    ax_cm.set_xlabel("Predicted Label")
+    ax_cm.set_ylabel("True Label")
+    # Rotate the y-achsis labels to be horizontal
+    ax_cm.set_yticklabels(ax_cm.get_yticklabels(), rotation="horizontal")
+
+    # Automatically adjust the gaps between graphs, to prevent text overlapping.
+    plt.tight_layout(pad=3.0)
+    # plt.show has to be here, because it resets the canvas after its closed.
+    plt.show()
 
     # Track all the layers for the summary.
     layer_rankings: list[str] = []
@@ -324,7 +350,7 @@ with torch.no_grad():
         with open(report_path, "w") as f:
             f.write("Classification Report:\n")
             f.write("\n")
-            f.write(report)
+            f.write(classification_report_summary)
             f.write(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s, on device: {device}\n")
             f.write("\nParameters are:\n")
             f.write(f" - Number of epochs: {NUM_EPOCHS}\n")
