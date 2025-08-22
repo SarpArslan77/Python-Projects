@@ -3,22 +3,53 @@ from torch.utils.data import DataLoader, WeightedRandomSampler, random_split
 import torch
 import torchvision
 import torchvision.transforms as T
+from torchvision.datasets import ImageFolder
+
+# Custom Dataset for utilizing data augmentation on specific classes
+class ConditionalAugmentationDataset(ImageFolder):
+    def __init__(self, root, special_class_indexes, special_transform=None, standard_transform=None):
+        super().__init__(root, transform=None)
+        # transform = None, because we weill manually apply it.
+
+        self.special_class_indexes = special_class_indexes
+        self.special_transform = special_transform
+        self.standard_transform = standard_transform
+
+        def __getitem__(self, index):
+            # Get the path and label for the image at the given index.
+            path, target = self.samples[index]
+            # Load the image from the path.
+            sample = self.loader(path)
+
+            # Check if the image's label matches the special class index.
+            if target in special_class_indexes:
+                # If yes, apply augmentation.
+                if self.special_transform:
+                    sample = self.special_transform(sample)
+                    print(target)
+            else:
+                # For all the other classes, apply the standard transform.
+                if self.standard_transform:
+                    sample = self.standard_transform(sample)
+            
+            return sample, target
+
 
 # Paths to training and test files
 TRAINING_READ_FILE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/train"
 TEST_READ_FILE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/test"
 
-BATCH_SIZE: int = 64
+BATCH_SIZE: int = 128
 
 # Apply slight randomizations on the images to create very similar, but not same datas.
-train_pipeline = T.Compose(
+heavy_augmentation_pipeline = T.Compose(
     [ 
         # Convert all images to 1-channel grayscale.
         T.Grayscale(num_output_channels=1),
         # Flip 90 % of the images horizontally.
-        T.RandomHorizontalFlip(p=0.9),
-        # Rotate the images by a random angle between -45 and +45 degrees.
-        T.RandomRotation(degrees=45),
+        T.RandomHorizontalFlip(p=0.8),
+        # Rotate the images by a random angle between -15 and +15 degrees.
+        T.RandomRotation(degrees=15),
         # Randomly zooms in on the image between 80 % and 120 %
         #? T.RandomAffine(degrees=0, scale=(0.8, 1.2), shear=10),
         # Apply a random perspective(shearing) transformation for % 40 of the time.
@@ -31,13 +62,13 @@ train_pipeline = T.Compose(
         T.ToTensor(), # Converts to [0, 1] range and shape [C, H, W]
         # Randomly erase a rectangular regions in the image.
         #? T.RandomErasing(p=0.4, scale=(0.02, 0.1), ratio=(0.3, 3.3), value=0),
-        # --- RandomErasing requires a Tensor to work on.
+        #       RandomErasing requires a Tensor to work on.
         T.Normalize(mean=(0.5,), std=(0.5,)), # Normalizes to [-1, 1] range
     ]
 )
 
 # Define a seperate pipeline for testing.
-test_pipeline = T.Compose(
+standard_pipeline = T.Compose(
     [
         T.Grayscale(num_output_channels=1),
         T.Resize((48, 48)),
@@ -48,9 +79,15 @@ test_pipeline = T.Compose(
 
 # Load the Dataset using ImageFolder with pipeline
 try:
-    train_dataset = torchvision.datasets.ImageFolder(
+    """train_dataset = torchvision.datasets.ImageFolder(
         root = TRAINING_READ_FILE_PATH,
         transform = train_pipeline,
+    )"""
+    train_dataset = ConditionalAugmentationDataset(
+        root = TRAINING_READ_FILE_PATH,
+        special_class_indexes = [1],
+        special_transform = heavy_augmentation_pipeline,
+        standard_transform = standard_pipeline,
     )
 except:
     print("Training dataset couldn't be loaded!")
@@ -83,13 +120,14 @@ sampler = WeightedRandomSampler(
 train_loader = DataLoader(
     dataset = train_dataset,
     batch_size = BATCH_SIZE,
-    sampler = sampler, # The sampler handles the shuffling logic.
+    #! sampler = sampler, # The sampler handles the shuffling logic.
+    shuffle = True,
 )
 
 # Repeat the creating dataset for test files.
-full_test_dataset = torchvision.datasets.ImageFolder(
+full_test_dataset = ImageFolder(
     root = TEST_READ_FILE_PATH,
-    transform = test_pipeline
+    transform = standard_pipeline
 )
 
 # We will create a validation set for dynamically adjusting learning rates while training.
