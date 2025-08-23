@@ -1,7 +1,6 @@
 
 from torch.utils.data import DataLoader, WeightedRandomSampler, random_split
 import torch
-import torchvision
 import torchvision.transforms as T
 from torchvision.datasets import ImageFolder
 
@@ -9,30 +8,29 @@ from torchvision.datasets import ImageFolder
 class ConditionalAugmentationDataset(ImageFolder):
     def __init__(self, root, special_class_indexes, special_transform=None, standard_transform=None):
         super().__init__(root, transform=None)
-        # transform = None, because we weill manually apply it.
+        # transform = None, because we will manually apply it.
 
         self.special_class_indexes = special_class_indexes
         self.special_transform = special_transform
         self.standard_transform = standard_transform
 
-        def __getitem__(self, index):
-            # Get the path and label for the image at the given index.
-            path, target = self.samples[index]
-            # Load the image from the path.
-            sample = self.loader(path)
+    def __getitem__(self, index):
+        # Get the path and label for the image at the given index.
+        path, target = self.samples[index]
+        # Load the image from the path.
+        sample = self.loader(path)
 
-            # Check if the image's label matches the special class index.
-            if target in special_class_indexes:
-                # If yes, apply augmentation.
-                if self.special_transform:
-                    sample = self.special_transform(sample)
-                    print(target)
-            else:
-                # For all the other classes, apply the standard transform.
-                if self.standard_transform:
-                    sample = self.standard_transform(sample)
-            
-            return sample, target
+        # Check if the image's label matches the special class index.
+        if target in self.special_class_indexes:
+            # If yes, apply augmentation.
+            if self.special_transform:
+                sample = self.special_transform(sample)
+        else:
+            # For all the other classes, apply the standard transform.
+            if self.standard_transform:
+                sample = self.standard_transform(sample)
+        
+        return sample, target
 
 
 # Paths to training and test files
@@ -42,7 +40,7 @@ TEST_READ_FILE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial
 BATCH_SIZE: int = 128
 
 # Apply slight randomizations on the images to create very similar, but not same datas.
-heavy_augmentation_pipeline = T.Compose(
+augmentation_pipeline = T.Compose(
     [ 
         # Convert all images to 1-channel grayscale.
         T.Grayscale(num_output_channels=1),
@@ -57,7 +55,7 @@ heavy_augmentation_pipeline = T.Compose(
         # Randomly change the brightness and contrast of the image.
         T.ColorJitter(brightness=0.5, contrast=0.5),
         # Determine the size to 48 x 48.
-        T.Resize((48, 48)),
+        T.Resize(size=(48, 48)),
         # Always end with converting to tensor and normalizing.
         T.ToTensor(), # Converts to [0, 1] range and shape [C, H, W]
         # Randomly erase a rectangular regions in the image.
@@ -79,14 +77,10 @@ standard_pipeline = T.Compose(
 
 # Load the Dataset using ImageFolder with pipeline
 try:
-    """train_dataset = torchvision.datasets.ImageFolder(
-        root = TRAINING_READ_FILE_PATH,
-        transform = train_pipeline,
-    )"""
     train_dataset = ConditionalAugmentationDataset(
         root = TRAINING_READ_FILE_PATH,
         special_class_indexes = [1],
-        special_transform = heavy_augmentation_pipeline,
+        special_transform = augmentation_pipeline,
         standard_transform = standard_pipeline,
     )
 except:
