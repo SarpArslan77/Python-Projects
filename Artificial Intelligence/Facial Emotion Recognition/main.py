@@ -1,6 +1,6 @@
 
-#! Fix the new custom dataset, it broke the code.
-#TODO Create a custom dataloader, in order to use the data augmentation only on disgust.
+#TODO define a helper function for augmentation summary, since they are duplicates
+#TODO pipeline summary titles are not working, fix it
 #TODO Try to optimize the training, make it faster
 
 import torch
@@ -13,13 +13,18 @@ from datetime import datetime
 import numpy as np
 import copy
 import seaborn as sns
+import torch.nn as nn
+import torchvision.transforms as T
 
 from data import (
     test_loader,
     train_loader,
     val_loader,
     BATCH_SIZE,
+    augmentation_pipeline,
+    standard_pipeline,
 )
+
 from cnn import (
     device,
     model,
@@ -30,7 +35,7 @@ from cnn import (
 )
 
 # Hyperparameters
-NUM_EPOCHS: int = 10
+NUM_EPOCHS: int = 1
 
 # Apply IPEX optimizations to the model and optimizer
 model, optimizer = ipex.optimize(model, optimizer=optimizer)
@@ -229,49 +234,6 @@ ax_lr.legend(
 
 mplcursors.cursor(line_lr)
 
-#! Unmark these part, whenever you not want to save the model parameters and accuracy graph.
-
-# Create a Timestamped directory for saving
-
-# Get the current date and time.
-dir_creation_time = datetime.now()
-
-# Format the timestamp for the directory name: e.g. "12/08/2025_10:30"
-new_dir_name: str = dir_creation_time.strftime("%d-%m-%Y_%H-%M")
-
-# Create the new directory path.
-MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/Runs/"
-new_dir_path: str = os.path.join(MODEL_SAVE_PATH, new_dir_name)
-
-try: # Create a new directory.
-    os.makedirs(new_dir_path,)
-    print(f"\nDirectory {new_dir_name} created succesfully.")
-except PermissionError:
-    print("New directory creation doesn't have the necessary permissions to write to that file.")
-except FileExistsError:
-    print("A Directory with an exact name exists.")
-else:
-    # This else-block only runs if the directory was created successfully.
-
-    # Define the file paths within the new directory.
-    best_model_parameters_path = os.path.join(new_dir_path, "best_model_parameters.pth")
-    last_model_parameters_path = os.path.join(new_dir_path, "last_model_parameters.pth")
-    acc_graph_path = os.path.join(new_dir_path, "acc_loss_lr_graph.png")
-
-    try: # Save the model's best state_dict.
-        torch.save(best_model_parameters, best_model_parameters_path)
-    except PermissionError:
-        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
-    try: # Save the model's last state.
-        torch.save(model.state_dict(), last_model_parameters_path)
-    except PermissionError:
-        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
-
-    try: # Save the Matplotlib.graph.
-        plt.savefig(acc_graph_path)
-    except PermissionError:
-        print("The Graph doesn't have the necessary permissions to write to that file.")
-
 emotion_labels: list[str] = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
 # Track all the model predictions and correct labels.
 all_predictions: list = []
@@ -332,54 +294,218 @@ with torch.no_grad():
 
     # Automatically adjust the gaps between graphs, to prevent text overlapping.
     plt.tight_layout(pad=3.0)
-    # plt.show has to be here, because it resets the canvas after its closed.
-    plt.show()
 
-    # Track all the layers for the summary.
-    layer_rankings: list[str] = []
+#! Unmark these part, whenever you not want to save the model parameters and accuracy graph.
+
+# Create a Timestamped directory for saving
+
+# Get the current date and time.
+dir_creation_time = datetime.now()
+
+# Format the timestamp for the directory name: e.g. "12/08/2025_10:30"
+new_dir_name: str = dir_creation_time.strftime("%d-%m-%Y_%H-%M")
+
+# Create the new directory path.
+MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/Runs/"
+new_dir_path: str = os.path.join(MODEL_SAVE_PATH, new_dir_name)
+
+try: # Create a new directory.
+    os.makedirs(new_dir_path,)
+    print(f"\nDirectory {new_dir_name} created succesfully.")
+except PermissionError:
+    print("New directory creation doesn't have the necessary permissions to write to that file.")
+except FileExistsError:
+    print("A Directory with an exact name exists.")
+else:
+    # This else-block only runs if the directory was created successfully.
+
+    # Define the file paths within the new directory.
+    best_model_parameters_path = os.path.join(new_dir_path, "best_model_parameters.pth")
+    last_model_parameters_path = os.path.join(new_dir_path, "last_model_parameters.pth")
+    acc_graph_path = os.path.join(new_dir_path, "graphs.png")
+
+    try: # Save the model's best state_dict.
+        torch.save(best_model_parameters, best_model_parameters_path)
+    except PermissionError:
+        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
+    try: # Save the model's last state.
+        torch.save(model.state_dict(), last_model_parameters_path)
+    except PermissionError:
+        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
+
+    try: # Save the Matplotlib.graph.
+        plt.savefig(acc_graph_path)
+        # plt.show has to be here, because it resets the canvas after its closed.
+        plt.show()
+    except PermissionError:
+        print("The Graph doesn't have the necessary permissions to write to that file.")
+
+try: # Save the report as .txt file to the newly created directory.
+    report_path: str = os.path.join(new_dir_path, "summary.txt")
+
+    # Get all the layers for the summary.
+    cnn_layers: list[str] = []
+    layer_count: int = 1
     for name, module in model.named_modules():
-        layer_type = type(module).__name__
-        layer_rankings.append(layer_type)
-    # Get the name of the optimizer, scheduler and loss function used for the cnn.
+        if isinstance(module, nn.Sequential):
+            cnn_layers.append(f"Layer {layer_count}:")
+            layer_count += 1
+        elif isinstance(module, nn.Conv2d):
+            in_channels = module.in_channels
+            out_channels = module.out_channels
+            kernel_size = module.kernel_size
+            padding = module.padding
+            cnn_layers.append(f" -> Conv2d(in_channels={in_channels}, out_channels={out_channels}, kernel_size={kernel_size}, padding={padding})")
+        elif isinstance(module, nn.MaxPool2d):
+            kernel_size = module.kernel_size
+            stride = module.stride
+            cnn_layers.append(f" -> MaxPool2d(kernel_size={kernel_size}, stride={stride})")
+        elif isinstance(module, nn.Linear):
+            in_features = module.in_features
+            out_features = module.out_features
+            cnn_layers.append(f" -> Linear(in_features={in_features}, out_features={out_features})")
+        elif isinstance(module, (nn.ReLU, nn.Dropout)):
+            cnn_layers.append(f" -> {type(module).__name__}()")
+
+    # Get all the optimizer parameters for the summary.
+    # The optimizer's parameters are stored in a dictionary called "param_groups"
     optimizer_type = type(optimizer).__name__
+    optimizer_params = optimizer.param_groups[0]
+    learning_rate = optimizer_params["lr"]
+
+    # We don't set any parameters for loss function.
     loss_function_type = type(criterion).__name__
+
+    # Scheduler parameters are direct attributes of the object.
     scheduler_type = type(scheduler).__name__
+    scheduler_mode = scheduler.mode
+    scheduler_factor = scheduler.factor
+    scheduler_patience = scheduler.patience
+    scheduler_min_lrs = scheduler.min_lrs
 
-    try: # Save the report as .txt file to the newly created directory.
-        report_path: str = os.path.join(new_dir_path, "summary.txt")
-        with open(report_path, "w") as f:
-            f.write("Classification Report:\n")
-            f.write("\n")
-            f.write(classification_report_summary)
-            f.write(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s, on device: {device}\n")
-            f.write("\nParameters are:\n")
-            f.write(f" - Number of epochs: {NUM_EPOCHS}\n")
-            f.write(f" - Batch size: {BATCH_SIZE}\n")
-            f.write(f" - Started with the learning rate {STARTING_LEARNING_RATE} and ended with {new_lr}\n")
-            f.write(f" - Best performing model at epoch {best_model_epoch} with accuracy {best_model_acc:.2f}% and loss {best_model_loss:.4f}\n")
-            f.write("\n")
-            # Write the layer structure.
-            layer_count: int = 1
-            for i, layer_name in enumerate(layer_rankings):
-                # First layer is the module name, write it with its properties.
-                if i == 0:
-                    f.write(f"Class {layer_name}:")
-                    f.write(f"\n - Optimizer: {optimizer_type}")
-                    f.write(f"\n - Loss Function: {loss_function_type}")
-                    f.write(f"\n - Scheduler: {scheduler_type}")
-                    f.write("\n")
-                # Sequential marks the beginning of a new layer.
-                elif layer_name == "Sequential":
-                    f.write(f"\nLayer {layer_count}:")
-                    layer_count += 1
-                    f.write("\n ")
-                else: 
-                    f.write(f" -> {layer_name}")
-            f.write("\n\n")
+    # Get all the layers and parameters from the pipelines for the summary.
+    augmentation_pipeline_transformations: list[str] = []
+    for transform in augmentation_pipeline.transforms:
+        transform_name = type(transform).__name__
 
-        print("\nReport also saved in the new directory.")
-    except FileNotFoundError:
-        print("File couldn't be found, so the saving of the report was unsuccesful.")
+        if isinstance(transform, T.Compose):
+            augmentation_pipeline_transformations.append(f"Augmentation Pipeline Transformations: ")
+        elif isinstance(transform, T.Grayscale):
+            num_output_channels = transform.num_output_channels
+            augmentation_pipeline_transformations.append(f" -> Grayscale(num_output_channels={num_output_channels})")
+        elif isinstance(transform, T.RandomHorizontalFlip):
+            p = transform.p
+            augmentation_pipeline_transformations.append(f" -> RandomHorizontalFlip(p={p})")
+        elif isinstance(transform, T.RandomRotation):
+            degrees = transform.degrees
+            augmentation_pipeline_transformations.append(f" -> RandomRotation(degrees={degrees})")
+        elif isinstance(transform, T.RandomAffine):
+            degrees = transform.degrees
+            scale = transform.scale
+            shear = transform.shear
+            augmentation_pipeline_transformations.append(f" -> RandomAffine(degrees={degrees}, scale={scale}, shear={shear})")
+        elif isinstance(transform, T.RandomPerspective):
+            distortion_scale = transform.distortion_scale
+            p = transform.p
+            augmentation_pipeline_transformations.append(f" -> RandomPerspective(distortion_scale={distortion_scale}, p={p})")
+        elif isinstance(transform, T.ColorJitter):
+            brightness = transform.brightness
+            contrast = transform.contrast
+            augmentation_pipeline_transformations.append(f" -> ColorJitter(brightness={brightness}, contrast={contrast})")
+        elif isinstance(transform, T.Resize):
+            size = transform.size
+            augmentation_pipeline_transformations.append(f" -> Resize(size={size})")
+        elif isinstance(transform, T.RandomErasing):
+            p = transform.p
+            scale = transform.scale
+            ratio = transform.ratio
+            value = transform.value
+            augmentation_pipeline_transformations.append(f" -> RandomErasing(p={p}, scale={scale}, ratio={ratio}, value={value})")
+        elif isinstance(transform, T.Normalize):
+            mean = transform.mean
+            std = transform.std
+            augmentation_pipeline_transformations.append(f" -> Normalize(mean={mean}, std={std})")
+        elif isinstance(transform, T.ToTensor):
+            augmentation_pipeline_transformations.append(f" -> ToTensor()")
+
+    standard_pipeline_transformations: list[str] = []
+    for transform in standard_pipeline.transforms:
+        transform_name = type(transform).__name__
+
+        if isinstance(transform, T.Compose):
+            standard_pipeline_transformations.append(f"Augmentation Pipeline Transformations: ")
+        elif isinstance(transform, T.Grayscale):
+            num_output_channels = transform.num_output_channels
+            standard_pipeline_transformations.append(f" -> Grayscale(num_output_channels={num_output_channels})")
+        elif isinstance(transform, T.RandomHorizontalFlip):
+            p = transform.p
+            standard_pipeline_transformations.append(f" -> RandomHorizontalFlip(p={p})")
+        elif isinstance(transform, T.RandomRotation):
+            degrees = transform.degrees
+            standard_pipeline_transformations.append(f" -> RandomRotation(degrees={degrees})")
+        elif isinstance(transform, T.RandomAffine):
+            degrees = transform.degrees
+            scale = transform.scale
+            shear = transform.shear
+            standard_pipeline_transformations.append(f" -> RandomAffine(degrees={degrees}, scale={scale}, shear={shear})")
+        elif isinstance(transform, T.RandomPerspective):
+            distortion_scale = transform.distortion_scale
+            p = transform.p
+            standard_pipeline_transformations.append(f" -> RandomPerspective(distortion_scale={distortion_scale}, p={p})")
+        elif isinstance(transform, T.ColorJitter):
+            brightness = transform.brightness
+            contrast = transform.contrast
+            standard_pipeline_transformations.append(f" -> ColorJitter(brightness={brightness}, contrast={contrast})")
+        elif isinstance(transform, T.Resize):
+            size = transform.size
+            standard_pipeline_transformations.append(f" -> Resize(size={size})")
+        elif isinstance(transform, T.RandomErasing):
+            p = transform.p
+            scale = transform.scale
+            ratio = transform.ratio
+            value = transform.value
+            standard_pipeline_transformations.append(f" -> RandomErasing(p={p}, scale={scale}, ratio={ratio}, value={value})")
+        elif isinstance(transform, T.Normalize):
+            mean = transform.mean
+            std = transform.std
+            standard_pipeline_transformations.append(f" -> Normalize(mean={mean}, std={std})")
+        elif isinstance(transform, T.ToTensor):
+            standard_pipeline_transformations.append(f" -> ToTensor()")
+
+    with open(report_path, "w") as f:
+        f.write("Classification Report:\n")
+        f.write("\n")
+        f.write(classification_report_summary)
+        f.write(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s, on device: {device}\n")
+        f.write("\nParameters are:\n")
+        f.write(f" - Number of epochs: {NUM_EPOCHS}\n")
+        f.write(f" - Batch size: {BATCH_SIZE}\n")
+        f.write(f" - Started with the learning rate {STARTING_LEARNING_RATE} and ended with {new_lr}\n")
+        f.write(f" - Best performing model at epoch {best_model_epoch} with accuracy {best_model_acc:.2f}% and loss {best_model_loss:.4f}")
+        f.write("\n\n")
+        f.write("Architecture: ")
+        # Write the layer structure.
+        for layer in cnn_layers:
+            # Leave space between all the layers.
+            if "Layer" in layer:
+                f.write("\n\n")
+            f.write(f"{layer}\n")
+        f.write("\n\n")
+        for au_transform in augmentation_pipeline_transformations:
+            # Leave space after the title.
+            if "Pipeline" in au_transform:
+                f.write("\n\n")
+            f.write(f"{au_transform}\n")
+        f.write("\n\n")
+        for stand_transform in standard_pipeline_transformations:
+            if "Pipeline" in stand_transform:
+                f.write("\n\n")
+            f.write(f"{stand_transform}\n")
+        f.write("\n\n")
+
+    print("\nReport also saved in the new directory.")
+except FileNotFoundError:
+    print("File couldn't be found, so the saving of the report was unsuccesful.")
 
 # Camera implementation
 """
