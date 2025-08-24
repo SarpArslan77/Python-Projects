@@ -1,6 +1,5 @@
 
-#TODO define a helper function for augmentation summary, since they are duplicates
-#TODO pipeline summary titles are not working, fix it
+#! overfitting is happening, fix it
 #TODO Try to optimize the training, make it faster
 
 import torch
@@ -35,7 +34,8 @@ from cnn import (
 )
 
 # Hyperparameters
-NUM_EPOCHS: int = 1
+NUM_EPOCHS: int = 15
+new_lr: float = STARTING_LEARNING_RATE
 
 # Apply IPEX optimizations to the model and optimizer
 model, optimizer = ipex.optimize(model, optimizer=optimizer)
@@ -110,7 +110,7 @@ for epoch in range(NUM_EPOCHS):
     val_loss_tracker.append(epoch_val_loss)
 
     # Save the learning rate from the optimizer.
-    new_lr: float = optimizer.param_groups[0]["lr"]
+    new_lr = optimizer.param_groups[0]["lr"]
     print(f"    Learning Rate: {new_lr}")
     lr_tracker.append(new_lr)
 
@@ -336,9 +336,58 @@ else:
     try: # Save the Matplotlib.graph.
         plt.savefig(acc_graph_path)
         # plt.show has to be here, because it resets the canvas after its closed.
-        plt.show()
+        #!plt.show()
     except PermissionError:
         print("The Graph doesn't have the necessary permissions to write to that file.")
+
+# Get all the layers and parameters from the pipelines for the summary.
+def get_pipeline_transformations(pipeline) -> list[str]:
+    pipeline_transformations: list[str] = []
+
+    for i, transform in enumerate(pipeline):
+
+        if i == 0:
+            pipeline_transformations.append(f"Augmentation Pipeline Transformations: ")
+
+        if isinstance(transform, T.Grayscale):
+            num_output_channels = transform.num_output_channels
+            pipeline_transformations.append(f" -> Grayscale(num_output_channels={num_output_channels})")
+        elif isinstance(transform, T.RandomHorizontalFlip):
+            p = transform.p
+            pipeline_transformations.append(f" -> RandomHorizontalFlip(p={p})")
+        elif isinstance(transform, T.RandomRotation):
+            degrees = transform.degrees
+            pipeline_transformations.append(f" -> RandomRotation(degrees={degrees})")
+        elif isinstance(transform, T.RandomAffine):
+            degrees = transform.degrees
+            scale = transform.scale
+            shear = transform.shear
+            pipeline_transformations.append(f" -> RandomAffine(degrees={degrees}, scale={scale}, shear={shear})")
+        elif isinstance(transform, T.RandomPerspective):
+            distortion_scale = transform.distortion_scale
+            p = transform.p
+            pipeline_transformations.append(f" -> RandomPerspective(distortion_scale={distortion_scale}, p={p})")
+        elif isinstance(transform, T.ColorJitter):
+            brightness = transform.brightness
+            contrast = transform.contrast
+            pipeline_transformations.append(f" -> ColorJitter(brightness={brightness}, contrast={contrast})")
+        elif isinstance(transform, T.Resize):
+            size = transform.size
+            pipeline_transformations.append(f" -> Resize(size={size})")
+        elif isinstance(transform, T.RandomErasing):
+            p = transform.p
+            scale = transform.scale
+            ratio = transform.ratio
+            value = transform.value
+            pipeline_transformations.append(f" -> RandomErasing(p={p}, scale={scale}, ratio={ratio}, value={value})")
+        elif isinstance(transform, T.Normalize):
+            mean = transform.mean
+            std = transform.std
+            pipeline_transformations.append(f" -> Normalize(mean={mean}, std={std})")
+        elif isinstance(transform, T.ToTensor):
+            pipeline_transformations.append(f" -> ToTensor()")
+
+    return pipeline_transformations
 
 try: # Save the report as .txt file to the newly created directory.
     report_path: str = os.path.join(new_dir_path, "summary.txt")
@@ -364,7 +413,13 @@ try: # Save the report as .txt file to the newly created directory.
             in_features = module.in_features
             out_features = module.out_features
             cnn_layers.append(f" -> Linear(in_features={in_features}, out_features={out_features})")
-        elif isinstance(module, (nn.ReLU, nn.Dropout)):
+        elif isinstance(module, nn.Dropout):
+            p = module.p
+            cnn_layers.append(f" -> Dropout(p={p})")
+        elif isinstance(module, nn.Dropout2d):
+            p = module.p
+            cnn_layers.append(f" -> Dropout2d(p={p})")
+        elif isinstance(module, (nn.ReLU)):
             cnn_layers.append(f" -> {type(module).__name__}()")
 
     # Get all the optimizer parameters for the summary.
@@ -372,6 +427,7 @@ try: # Save the report as .txt file to the newly created directory.
     optimizer_type = type(optimizer).__name__
     optimizer_params = optimizer.param_groups[0]
     learning_rate = optimizer_params["lr"]
+    weight_decay = optimizer_params["weight_decay"]
 
     # We don't set any parameters for loss function.
     loss_function_type = type(criterion).__name__
@@ -383,125 +439,55 @@ try: # Save the report as .txt file to the newly created directory.
     scheduler_patience = scheduler.patience
     scheduler_min_lrs = scheduler.min_lrs
 
-    # Get all the layers and parameters from the pipelines for the summary.
-    augmentation_pipeline_transformations: list[str] = []
-    for transform in augmentation_pipeline.transforms:
-        transform_name = type(transform).__name__
-
-        if isinstance(transform, T.Compose):
-            augmentation_pipeline_transformations.append(f"Augmentation Pipeline Transformations: ")
-        elif isinstance(transform, T.Grayscale):
-            num_output_channels = transform.num_output_channels
-            augmentation_pipeline_transformations.append(f" -> Grayscale(num_output_channels={num_output_channels})")
-        elif isinstance(transform, T.RandomHorizontalFlip):
-            p = transform.p
-            augmentation_pipeline_transformations.append(f" -> RandomHorizontalFlip(p={p})")
-        elif isinstance(transform, T.RandomRotation):
-            degrees = transform.degrees
-            augmentation_pipeline_transformations.append(f" -> RandomRotation(degrees={degrees})")
-        elif isinstance(transform, T.RandomAffine):
-            degrees = transform.degrees
-            scale = transform.scale
-            shear = transform.shear
-            augmentation_pipeline_transformations.append(f" -> RandomAffine(degrees={degrees}, scale={scale}, shear={shear})")
-        elif isinstance(transform, T.RandomPerspective):
-            distortion_scale = transform.distortion_scale
-            p = transform.p
-            augmentation_pipeline_transformations.append(f" -> RandomPerspective(distortion_scale={distortion_scale}, p={p})")
-        elif isinstance(transform, T.ColorJitter):
-            brightness = transform.brightness
-            contrast = transform.contrast
-            augmentation_pipeline_transformations.append(f" -> ColorJitter(brightness={brightness}, contrast={contrast})")
-        elif isinstance(transform, T.Resize):
-            size = transform.size
-            augmentation_pipeline_transformations.append(f" -> Resize(size={size})")
-        elif isinstance(transform, T.RandomErasing):
-            p = transform.p
-            scale = transform.scale
-            ratio = transform.ratio
-            value = transform.value
-            augmentation_pipeline_transformations.append(f" -> RandomErasing(p={p}, scale={scale}, ratio={ratio}, value={value})")
-        elif isinstance(transform, T.Normalize):
-            mean = transform.mean
-            std = transform.std
-            augmentation_pipeline_transformations.append(f" -> Normalize(mean={mean}, std={std})")
-        elif isinstance(transform, T.ToTensor):
-            augmentation_pipeline_transformations.append(f" -> ToTensor()")
-
-    standard_pipeline_transformations: list[str] = []
-    for transform in standard_pipeline.transforms:
-        transform_name = type(transform).__name__
-
-        if isinstance(transform, T.Compose):
-            standard_pipeline_transformations.append(f"Augmentation Pipeline Transformations: ")
-        elif isinstance(transform, T.Grayscale):
-            num_output_channels = transform.num_output_channels
-            standard_pipeline_transformations.append(f" -> Grayscale(num_output_channels={num_output_channels})")
-        elif isinstance(transform, T.RandomHorizontalFlip):
-            p = transform.p
-            standard_pipeline_transformations.append(f" -> RandomHorizontalFlip(p={p})")
-        elif isinstance(transform, T.RandomRotation):
-            degrees = transform.degrees
-            standard_pipeline_transformations.append(f" -> RandomRotation(degrees={degrees})")
-        elif isinstance(transform, T.RandomAffine):
-            degrees = transform.degrees
-            scale = transform.scale
-            shear = transform.shear
-            standard_pipeline_transformations.append(f" -> RandomAffine(degrees={degrees}, scale={scale}, shear={shear})")
-        elif isinstance(transform, T.RandomPerspective):
-            distortion_scale = transform.distortion_scale
-            p = transform.p
-            standard_pipeline_transformations.append(f" -> RandomPerspective(distortion_scale={distortion_scale}, p={p})")
-        elif isinstance(transform, T.ColorJitter):
-            brightness = transform.brightness
-            contrast = transform.contrast
-            standard_pipeline_transformations.append(f" -> ColorJitter(brightness={brightness}, contrast={contrast})")
-        elif isinstance(transform, T.Resize):
-            size = transform.size
-            standard_pipeline_transformations.append(f" -> Resize(size={size})")
-        elif isinstance(transform, T.RandomErasing):
-            p = transform.p
-            scale = transform.scale
-            ratio = transform.ratio
-            value = transform.value
-            standard_pipeline_transformations.append(f" -> RandomErasing(p={p}, scale={scale}, ratio={ratio}, value={value})")
-        elif isinstance(transform, T.Normalize):
-            mean = transform.mean
-            std = transform.std
-            standard_pipeline_transformations.append(f" -> Normalize(mean={mean}, std={std})")
-        elif isinstance(transform, T.ToTensor):
-            standard_pipeline_transformations.append(f" -> ToTensor()")
+    augmentation_pipeline_transformations = get_pipeline_transformations(augmentation_pipeline.transforms)
+    standard_pipeline_transformations = get_pipeline_transformations(standard_pipeline.transforms)
 
     with open(report_path, "w") as f:
         f.write("Classification Report:\n")
         f.write("\n")
         f.write(classification_report_summary)
         f.write(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s, on device: {device}\n")
+        f.write(f"\n")
         f.write("\nParameters are:\n")
         f.write(f" - Number of epochs: {NUM_EPOCHS}\n")
         f.write(f" - Batch size: {BATCH_SIZE}\n")
         f.write(f" - Started with the learning rate {STARTING_LEARNING_RATE} and ended with {new_lr}\n")
-        f.write(f" - Best performing model at epoch {best_model_epoch} with accuracy {best_model_acc:.2f}% and loss {best_model_loss:.4f}")
-        f.write("\n\n")
-        f.write("Architecture: ")
+        f.write(f" - Best performing model at epoch {best_model_epoch} with accuracy {best_model_acc:.2f}% and loss {best_model_loss:.4f}\n")
+        f.write(f"\nComponents:\n")
+        f.write(f"  Optimizer:\n")
+        f.write(f"  -> Type: {optimizer_type}\n")
+        f.write(f"  -> Starting learning rate: {learning_rate}\n")
+        f.write(f"  -> Weight decay: {weight_decay}\n")
+        f.write(f"  Loss Function:\n")
+        f.write(f"  -> Type: {loss_function_type}\n")
+        f.write(f"  Scheduler:\n")
+        f.write(f"  -> Type: {scheduler_type}\n")
+        f.write(f"  -> Mode: {scheduler_mode}\n")
+        f.write(f"  -> Factor: {scheduler_factor}\n")
+        f.write(f"  -> Patience: {scheduler_patience}\n")
+        f.write(f"  -> Minimum learning rate: {scheduler_min_lrs}\n")
+
+        f.write("\nArchitecture: ")
         # Write the layer structure.
         for layer in cnn_layers:
             # Leave space between all the layers.
             if "Layer" in layer:
-                f.write("\n\n")
-            f.write(f"{layer}\n")
-        f.write("\n\n")
+                f.write("\n")
+            f.write(f"\n{layer}")
+        f.write("\n")
+
         for au_transform in augmentation_pipeline_transformations:
             # Leave space after the title.
+            f.write(f"\n{au_transform}")
             if "Pipeline" in au_transform:
-                f.write("\n\n")
-            f.write(f"{au_transform}\n")
-        f.write("\n\n")
+                f.write("\n")
+        f.write("\n")
+
         for stand_transform in standard_pipeline_transformations:
+            f.write(f"\n{stand_transform}")
             if "Pipeline" in stand_transform:
-                f.write("\n\n")
-            f.write(f"{stand_transform}\n")
-        f.write("\n\n")
+                f.write("\n")
+        f.write("\n")
 
     print("\nReport also saved in the new directory.")
 except FileNotFoundError:
