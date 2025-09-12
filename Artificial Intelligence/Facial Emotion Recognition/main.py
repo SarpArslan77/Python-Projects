@@ -1,511 +1,163 @@
 
-#! overfitting is happening, fix it
-#TODO Try to optimize the training, make it faster
-
-import torch
-from sklearn.metrics import classification_report, confusion_matrix
-import intel_extension_for_pytorch as ipex
-import matplotlib.pyplot as plt
-import mplcursors
+import cv2
+import json
 import os
-from datetime import datetime
+from cnn import ConvNet
+import torch
 import numpy as np
-import copy
-import seaborn as sns
-import torch.nn as nn
-import torchvision.transforms as T
-
-from data import (
-    test_loader,
-    train_loader,
-    val_loader,
-    BATCH_SIZE,
-    augmentation_pipeline,
-    standard_pipeline,
-)
-
-from cnn import (
-    device,
-    model,
-    criterion,
-    optimizer,
-    scheduler,
-    STARTING_LEARNING_RATE,
-)
-
-# Hyperparameters
-NUM_EPOCHS: int = 15
-new_lr: float = STARTING_LEARNING_RATE
-
-# Apply IPEX optimizations to the model and optimizer
-model, optimizer = ipex.optimize(model, optimizer=optimizer)
-
-# Training Loop
-print("\nStarting Training!")
-training_start_time = datetime.now()
-# Tracking parameters for the graph.
-train_acc_tracker: list[float] = []
-val_acc_tracker: list[float] = []
-train_loss_tracker: list[float] = []
-val_loss_tracker: list[float] = []
-lr_tracker: list[float] = []
-# Track the best model with the lowest validation loss.
-lowest_val_loss: float = np.inf
-best_model_parameters = np.nan
-# Stores the epoch, val_acc and val_loss for the best model, to be marked in the graph.
-best_model_val_values: list = [np.nan, np.nan, np.nan] # [epoch, val_acc, val_loss]
-for epoch in range(NUM_EPOCHS):
-    print(f"\nEpoch : {epoch+1}/{NUM_EPOCHS}")
-    model.train()
-    running_loss: float = 0.0 # Tracking loss for optimizing the learning rate.
-    n_correct: int = 0
-    n_total: int = 0
-    for i, (images, labels) in enumerate(train_loader):
-        images, labels = images.to(device), labels.to(device)
-
-        # Forward pass
-        outputs = model(images)
-        loss = criterion(outputs, labels)
-
-        # Calculate the accuracy.
-        _, predicted = torch.max(outputs.data, 1)
-        n_total += labels.size(0)
-        # All tensors have to be on the same device.
-        n_correct += (predicted.cpu() == labels.cpu()).sum().item()
-
-        # Backward pass and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # Update the loss.
-        running_loss += loss.item() * images.size(0)
-
-    train_acc: float = 100.0 * n_correct / n_total
-    epoch_train_loss: float = running_loss / len(train_loader.dataset)
-    print(f"    Train accuracy : {train_acc:.2f}% | Train Loss: {epoch_train_loss:.4f}")
-    train_acc_tracker.append(train_acc)
-    train_loss_tracker.append(epoch_train_loss)
-
-    # Validation Phase
-    model.eval()
-    val_loss: float = 0.0
-    val_correct: int = 0
-    val_total: int = 0
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            val_loss += loss.item() * images.size(0)
-
-            _, predicted = torch.max(outputs.data, 1)
-            val_total += labels.size(0)
-            val_correct += (predicted.cpu() == labels.cpu()).sum().item()
-    
-    val_acc: float = 100.0 * val_correct / val_total
-    epoch_val_loss: float = val_loss / len(val_loader.dataset)
-    print(f"    Validation accuracy : {val_acc:.2f}% | Val Loss: {epoch_val_loss:.4f}")
-    val_acc_tracker.append(val_acc)
-    val_loss_tracker.append(epoch_val_loss)
-
-    # Save the learning rate from the optimizer.
-    new_lr = optimizer.param_groups[0]["lr"]
-    print(f"    Learning Rate: {new_lr}")
-    lr_tracker.append(new_lr)
-
-    # Update the best model and validation loss if the new model is better.
-    if epoch_val_loss < lowest_val_loss:
-        lowest_val_loss = epoch_val_loss
-        best_model_parameters = copy.deepcopy(model.state_dict())
-        best_model_val_values = [epoch, val_acc, epoch_val_loss]
-
-    # Step the scheduler with validation loss
-    scheduler.step(epoch_val_loss)
-print("\nFinished Training.")
-# Calculate the training time.
-training_end_time = datetime.now()
-elapsed_seconds = (training_end_time - training_start_time).total_seconds()
-seconds = elapsed_seconds % 60
-minutes = (elapsed_seconds % 3600) // 60
-hours = elapsed_seconds // 3600
-print(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s")
-
-# Create a graph for tracking the accuracy, loss and learning rate.
-fig, ((ax_acc, ax_loss) , (ax_lr, ax_cm)) = plt.subplots(2, 2, figsize=(10, 10))
-
-# Unpack the best model values for the graph marking.
-best_model_epoch = best_model_val_values[0]
-best_model_acc = best_model_val_values[1]
-best_model_loss = best_model_val_values[2]
-
-# First create for the both accuracy.
-# Training accuracy
-line_train_acc, = ax_acc.plot(
-    train_acc_tracker,
-    color = "red",
-)
-# Validation accuracy
-line_val_acc, = ax_acc.plot(
-    val_acc_tracker,
-    color = "blue"
-)
-
-# Add the star marking for the best model.
-ax_acc.plot(
-    best_model_epoch,
-    best_model_acc,
-    marker = "*", 
-    # marker argument tells the .plot function, which automatically draws lines,
-    #   to draw only one point in the graph.
-    color = "gold",
-    markersize = 12,
-    markeredgecolor = "black",
-    markeredgewidth = 1,
-    label = "Best Model Accuracy"
-)
-
-# Accuracy plot settings
-ax_acc.set_title("Training & Validation Accuracy Progression")
-ax_acc.set_xlabel("Epoch")
-ax_acc.set_ylabel("Accuracy")
-ax_acc.grid(True)
-ax_acc.legend(
-    [line_train_acc, line_val_acc], 
-    ["Training Accuracy", "Validation Accuracy"], 
-    loc = "lower right",
-)
-
-# Add interactive cursor
-mplcursors.cursor(line_train_acc)
-mplcursors.cursor(line_val_acc)
-
-# Repeat for loss.
-line_train_loss, = ax_loss.plot(
-    train_loss_tracker,
-    color = "red",
-    linestyle="--",
-)
-line_val_loss, = ax_loss.plot(
-    val_loss_tracker,
-    color = "blue",
-    linestyle = "--",
-)
-
-ax_loss.plot(
-    best_model_epoch,
-    best_model_loss,
-    marker = "*",
-    color = "gold",
-    markersize = 12,
-    markeredgecolor = "black",
-    markeredgewidth = 1,
-    label = "Best Model Loss"
-)
-
-ax_loss.set_title("Training & Validation Loss Progression")
-ax_loss.set_xlabel("Epoch")
-ax_loss.set_ylabel("Loss")
-ax_loss.grid(True)
-ax_loss.legend(
-    [line_train_loss, line_val_loss], 
-    ["Training Loss", "Validation Loss"], 
-    loc = "upper right",
-)
-
-mplcursors.cursor(line_train_loss)
-mplcursors.cursor(line_val_loss)
-
-# Repeat for learning rate.
-line_lr, = ax_lr.plot(
-    lr_tracker,
-    color = "orange",
-)
-
-ax_lr.set_title("Learning Rate Progression")
-ax_lr.set_xlabel("Epoch")
-ax_lr.set_ylabel("Learning Rate")
-ax_lr.grid(True)
-ax_lr.legend(
-    [line_lr],
-    ["Learning Rate"],
-    loc = "upper right",
-)
-
-mplcursors.cursor(line_lr)
-
-emotion_labels: list[str] = ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"]
-# Track all the model predictions and correct labels.
-all_predictions: list = []
-all_labels: list = []
-
-# Testing loop
-model.eval()
-print("\nStarting Testing!")
-with torch.no_grad():
-    n_correct: int = 0
-    n_samples: int = 0
-    for j, (images, labels) in enumerate(test_loader):
-        images, labels = images.to(device), labels.to(device)
-
-        outputs = model(images)
-
-        # Max returns (value, index)
-        _, predicted = torch.max(outputs.data, 1)
-
-        # Append the predictions and labels from this batch to our master lists.
-        #       We move them to the CPU to use with numpy/sklearn.
-        all_predictions.extend(predicted.cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
-
-        n_samples += labels.cpu().size(0)
-        n_correct += (predicted.cpu() == labels.cpu()).sum().item()
-
-    accuracy: float = n_correct / n_samples * 100.0
-    print(f"\nAccuracy of the network is: {accuracy:.2f} %")
-
-    # This report includes precision, recall and f1-score for each class.
-    classification_report_summary = classification_report(
-        all_labels,
-        all_predictions,
-        target_names=emotion_labels,
-    )
-    print("\nClassification Report:\n")
-    print(classification_report_summary)
-
-    # Create the confusion matrix, to see which emotions are between each are confused by the model.
-    confusion_matrix_report = confusion_matrix(all_labels, all_predictions)
-    # Add the cm to the graphs.
-    sns.heatmap(
-        confusion_matrix_report,
-        annot = True, # Display the number in each cell.
-        fmt = "d", # Format the numbers as integers.
-        cmap = "Blues", # Use Red-And-Blue colormap.
-        xticklabels = emotion_labels,
-        yticklabels = emotion_labels,
-        ax = ax_cm,
-    )
-
-    ax_cm.set_title("Confusion Matrix")
-    ax_cm.set_xlabel("Predicted Label")
-    ax_cm.set_ylabel("True Label")
-    # Rotate the y-achsis labels to be horizontal
-    ax_cm.set_yticklabels(ax_cm.get_yticklabels(), rotation="horizontal")
-
-    # Automatically adjust the gaps between graphs, to prevent text overlapping.
-    plt.tight_layout(pad=3.0)
-
-#! Unmark these part, whenever you not want to save the model parameters and accuracy graph.
-
-# Create a Timestamped directory for saving
-
-# Get the current date and time.
-dir_creation_time = datetime.now()
-
-# Format the timestamp for the directory name: e.g. "12/08/2025_10:30"
-new_dir_name: str = dir_creation_time.strftime("%d-%m-%Y_%H-%M")
-
-# Create the new directory path.
-MODEL_SAVE_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/Runs/"
-new_dir_path: str = os.path.join(MODEL_SAVE_PATH, new_dir_name)
-
-try: # Create a new directory.
-    os.makedirs(new_dir_path,)
-    print(f"\nDirectory {new_dir_name} created succesfully.")
-except PermissionError:
-    print("New directory creation doesn't have the necessary permissions to write to that file.")
-except FileExistsError:
-    print("A Directory with an exact name exists.")
-else:
-    # This else-block only runs if the directory was created successfully.
-
-    # Define the file paths within the new directory.
-    best_model_parameters_path = os.path.join(new_dir_path, "best_model_parameters.pth")
-    last_model_parameters_path = os.path.join(new_dir_path, "last_model_parameters.pth")
-    acc_graph_path = os.path.join(new_dir_path, "graphs.png")
-
-    try: # Save the model's best state_dict.
-        torch.save(best_model_parameters, best_model_parameters_path)
-    except PermissionError:
-        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
-    try: # Save the model's last state.
-        torch.save(model.state_dict(), last_model_parameters_path)
-    except PermissionError:
-        print("Model parameter saving doesn't have the necessary permissions to write to that file.")
-
-    try: # Save the Matplotlib.graph.
-        plt.savefig(acc_graph_path)
-        # plt.show has to be here, because it resets the canvas after its closed.
-        #!plt.show()
-    except PermissionError:
-        print("The Graph doesn't have the necessary permissions to write to that file.")
-
-# Get all the layers and parameters from the pipelines for the summary.
-def get_pipeline_transformations(pipeline) -> list[str]:
-    pipeline_transformations: list[str] = []
-
-    for i, transform in enumerate(pipeline):
-
-        if i == 0:
-            pipeline_transformations.append(f"Augmentation Pipeline Transformations: ")
-
-        if isinstance(transform, T.Grayscale):
-            num_output_channels = transform.num_output_channels
-            pipeline_transformations.append(f" -> Grayscale(num_output_channels={num_output_channels})")
-        elif isinstance(transform, T.RandomHorizontalFlip):
-            p = transform.p
-            pipeline_transformations.append(f" -> RandomHorizontalFlip(p={p})")
-        elif isinstance(transform, T.RandomRotation):
-            degrees = transform.degrees
-            pipeline_transformations.append(f" -> RandomRotation(degrees={degrees})")
-        elif isinstance(transform, T.RandomAffine):
-            degrees = transform.degrees
-            scale = transform.scale
-            shear = transform.shear
-            pipeline_transformations.append(f" -> RandomAffine(degrees={degrees}, scale={scale}, shear={shear})")
-        elif isinstance(transform, T.RandomPerspective):
-            distortion_scale = transform.distortion_scale
-            p = transform.p
-            pipeline_transformations.append(f" -> RandomPerspective(distortion_scale={distortion_scale}, p={p})")
-        elif isinstance(transform, T.ColorJitter):
-            brightness = transform.brightness
-            contrast = transform.contrast
-            pipeline_transformations.append(f" -> ColorJitter(brightness={brightness}, contrast={contrast})")
-        elif isinstance(transform, T.Resize):
-            size = transform.size
-            pipeline_transformations.append(f" -> Resize(size={size})")
-        elif isinstance(transform, T.RandomErasing):
-            p = transform.p
-            scale = transform.scale
-            ratio = transform.ratio
-            value = transform.value
-            pipeline_transformations.append(f" -> RandomErasing(p={p}, scale={scale}, ratio={ratio}, value={value})")
-        elif isinstance(transform, T.Normalize):
-            mean = transform.mean
-            std = transform.std
-            pipeline_transformations.append(f" -> Normalize(mean={mean}, std={std})")
-        elif isinstance(transform, T.ToTensor):
-            pipeline_transformations.append(f" -> ToTensor()")
-
-    return pipeline_transformations
-
-try: # Save the report as .txt file to the newly created directory.
-    report_path: str = os.path.join(new_dir_path, "summary.txt")
-
-    # Get all the layers for the summary.
-    cnn_layers: list[str] = []
-    layer_count: int = 1
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Sequential):
-            cnn_layers.append(f"Layer {layer_count}:")
-            layer_count += 1
-        elif isinstance(module, nn.Conv2d):
-            in_channels = module.in_channels
-            out_channels = module.out_channels
-            kernel_size = module.kernel_size
-            padding = module.padding
-            cnn_layers.append(f" -> Conv2d(in_channels={in_channels}, out_channels={out_channels}, kernel_size={kernel_size}, padding={padding})")
-        elif isinstance(module, nn.MaxPool2d):
-            kernel_size = module.kernel_size
-            stride = module.stride
-            cnn_layers.append(f" -> MaxPool2d(kernel_size={kernel_size}, stride={stride})")
-        elif isinstance(module, nn.Linear):
-            in_features = module.in_features
-            out_features = module.out_features
-            cnn_layers.append(f" -> Linear(in_features={in_features}, out_features={out_features})")
-        elif isinstance(module, nn.Dropout):
-            p = module.p
-            cnn_layers.append(f" -> Dropout(p={p})")
-        elif isinstance(module, nn.Dropout2d):
-            p = module.p
-            cnn_layers.append(f" -> Dropout2d(p={p})")
-        elif isinstance(module, (nn.ReLU)):
-            cnn_layers.append(f" -> {type(module).__name__}()")
-
-    # Get all the optimizer parameters for the summary.
-    # The optimizer's parameters are stored in a dictionary called "param_groups"
-    optimizer_type = type(optimizer).__name__
-    optimizer_params = optimizer.param_groups[0]
-    learning_rate = optimizer_params["lr"]
-    weight_decay = optimizer_params["weight_decay"]
-
-    # We don't set any parameters for loss function.
-    loss_function_type = type(criterion).__name__
-
-    # Scheduler parameters are direct attributes of the object.
-    scheduler_type = type(scheduler).__name__
-    scheduler_mode = scheduler.mode
-    scheduler_factor = scheduler.factor
-    scheduler_patience = scheduler.patience
-    scheduler_min_lrs = scheduler.min_lrs
-
-    augmentation_pipeline_transformations = get_pipeline_transformations(augmentation_pipeline.transforms)
-    standard_pipeline_transformations = get_pipeline_transformations(standard_pipeline.transforms)
-
-    with open(report_path, "w") as f:
-        f.write("Classification Report:\n")
-        f.write("\n")
-        f.write(classification_report_summary)
-        f.write(f"\nTotal Training Time: {int(hours)}h {int(minutes)}m {int(seconds)}s, on device: {device}\n")
-        f.write(f"\n")
-        f.write("\nParameters are:\n")
-        f.write(f" - Number of epochs: {NUM_EPOCHS}\n")
-        f.write(f" - Batch size: {BATCH_SIZE}\n")
-        f.write(f" - Started with the learning rate {STARTING_LEARNING_RATE} and ended with {new_lr}\n")
-        f.write(f" - Best performing model at epoch {best_model_epoch} with accuracy {best_model_acc:.2f}% and loss {best_model_loss:.4f}\n")
-        f.write(f"\nComponents:\n")
-        f.write(f"  Optimizer:\n")
-        f.write(f"  -> Type: {optimizer_type}\n")
-        f.write(f"  -> Starting learning rate: {learning_rate}\n")
-        f.write(f"  -> Weight decay: {weight_decay}\n")
-        f.write(f"  Loss Function:\n")
-        f.write(f"  -> Type: {loss_function_type}\n")
-        f.write(f"  Scheduler:\n")
-        f.write(f"  -> Type: {scheduler_type}\n")
-        f.write(f"  -> Mode: {scheduler_mode}\n")
-        f.write(f"  -> Factor: {scheduler_factor}\n")
-        f.write(f"  -> Patience: {scheduler_patience}\n")
-        f.write(f"  -> Minimum learning rate: {scheduler_min_lrs}\n")
-
-        f.write("\nArchitecture: ")
-        # Write the layer structure.
-        for layer in cnn_layers:
-            # Leave space between all the layers.
-            if "Layer" in layer:
-                f.write("\n")
-            f.write(f"\n{layer}")
-        f.write("\n")
-
-        for au_transform in augmentation_pipeline_transformations:
-            # Leave space after the title.
-            f.write(f"\n{au_transform}")
-            if "Pipeline" in au_transform:
-                f.write("\n")
-        f.write("\n")
-
-        for stand_transform in standard_pipeline_transformations:
-            f.write(f"\n{stand_transform}")
-            if "Pipeline" in stand_transform:
-                f.write("\n")
-        f.write("\n")
-
-    print("\nReport also saved in the new directory.")
-except FileNotFoundError:
-    print("File couldn't be found, so the saving of the report was unsuccesful.")
+import torch.nn.functional as F
+from collections import deque
+
+MAIN_FILE_READ_PATH: str = r"C:/Users/Besitzer/Desktop/Python/AI Projects/Facial Emotion Recognition/"
+json_file_path: str = os.path.join(MAIN_FILE_READ_PATH, "config.json")
+best_model_parameters_path: str = os.path.join(MAIN_FILE_READ_PATH, "Best Model/best_model_parameters.pth")
+
+# Load the configuration file.
+with open(json_file_path, "r") as f:
+    config = json.load(f)
+
+# Unpack the parameters into variables for easy access.
+camera_cfg = config["camera_params"]
+
+camera_width: int = camera_cfg["cnn_input_width"]
+camera_height: int = camera_cfg["cnn_input_height"]
+
+# A list of the 7 emotions that the model can predict.
+EMOTIONS = ["Angry", "Disgust", "Fear", "Happy", "Neutral", "Sad", "Surprise"]
+
+# A dictionary to map emotions to colors.
+EMOTION_COLORS = {
+    "Angry":    (0, 0, 255),     # Red
+    "Disgust":  (0, 128, 0),     # Green
+    "Fear":     (128, 0, 128),   # Purple
+    "Happy":    (0, 255, 255),   # Yellow
+    "Neutral":  (128, 128, 128),  # Gray
+    "Sad":      (255, 0, 0),     # Blue
+    "Surprise": (255, 165, 0),   # Orange
+}
+
+EMOTION_CLASSES = {
+    0: "Angry",
+    1: "Disgust",
+    2: "Fear",
+    3: "Happy",
+    4: "Neutral",
+    5: "Sad",
+    6: "Surprise",
+
+}
+
+# Labels for the predictions.
+def create_GUI(frame, predictions):
+
+    # Convert tensor to a NumPy array.
+    predictions = predictions.squeeze().numpy()
+
+    # Create a black canvas for the dashboard.
+    dashboard_width: int = 320
+    dashboard = np.zeros((frame.shape[0], dashboard_width, 3), dtype="uint8")
+
+    # Draw elements on the dashboard.
+    cv2.putText(dashboard, "Emotion Predictions", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
+    for i, (emotion, prob) in enumerate(zip(EMOTIONS, predictions)):
+        bar_y: int = i * 40 + 80
+        color = EMOTION_COLORS.get(emotion, (255, 255, 255))
+        
+        # Format the text and draw it.
+        text: str = f"{emotion}: {prob:.1%}"
+        cv2.putText(dashboard, text, (10, bar_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        # Draw the bar.
+        bar_width: int = int(prob * (dashboard_width - 130))
+        cv2.rectangle(dashboard, (180, bar_y + 5), (180 + bar_width, bar_y + 25), color, -1)
+
+    # Stitch the camera frame and the dashboard together horizontally.
+    combined_frame = np.hstack([frame, dashboard])
+
+    return combined_frame
 
 # Camera implementation
-"""
+
 # Create the VideoCapture object.
 camera = cv2.VideoCapture(0) # 0 = default camera
 
+# Load the face detector outside the loop.
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+# Initialize the cnn model and upload the parameters.
+best_model = ConvNet()
+checkpoint = torch.load(best_model_parameters_path)
+best_model.load_state_dict(checkpoint["model_state_dict"])
+best_model.eval()
+
+# Keep a history of the last N predictions.
+PREDICTION_HISTORY_LEN = 40
+prediction_history = deque(maxlen=PREDICTION_HISTORY_LEN)
+
 # Main loop to get continiues data.
+print("\nCamera Opened! Press 'q' to quit.")
 while True:
     ret, frame = camera.read()
     # ret: is a boolean value True if the frame was red successfully
     # frame: actual image captured
 
+    # Flip the frame horizontally for a mirror-like view
+    mirrored_frame = cv2.flip(frame, 1)
+    # Turn into gray scale.
+    gray_frame = cv2.cvtColor(mirrored_frame, cv2.COLOR_BGR2GRAY)
+    # Detect faces.
+    faces = faces = face_cascade.detectMultiScale(gray_frame, 1.1, 4)
+    # If there is no face detected, just keep the last result.
+    if prediction_history:
+        current_probabilities = prediction_history[-1]
+    else:
+        # If for whatever reason the list ist empty, just initialize it to zero.
+        current_probabilities = torch.zeros((1, len(EMOTIONS)))
+
+    # If a face is found, process it.
+    if len(faces) > 0:
+        # Get the first face found.
+        (x, y, w, h) = faces[0]
+
+        # Draw a rectangle around the detected face on the original frame.
+        cv2.rectangle(mirrored_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+
+        # Crop the face from the grayscaled frame.
+        cropped_face = gray_frame[y:y+h, x:x+w]
+        # Resize the cropped face to 48x48.
+        resized_face = cv2.resize(cropped_face, (camera_width, camera_height))
+        # Conver to tensor and normalize.
+        tensor_frame = torch.from_numpy(resized_face).float()
+        tensor_frame = (tensor_frame / 255.0 - 0.5) / 0.5
+        # Add batch and channel dimensions. (48, 48) -> (1, 1, 48, 48)
+        tensor_frame = tensor_frame.unsqueeze(0).unsqueeze(0)
+
+        # Make predictions as emotion recognition.
+        with torch.no_grad():
+            # Get the raw logit scores from the model.
+            output = best_model(tensor_frame)
+            # Apply the softmax function to convert the logits to probabilities.
+            current_probabilities = F.softmax(output, dim=1)
+
+    # Update and average the predictions.
+    prediction_history.append(current_probabilities)
+    if len(prediction_history) > 0:
+        # Stack the tensors in the deque and compute the mean along the batch dimension.
+        average_probabilities = torch.mean(torch.stack(list(prediction_history)), dim=0)
+    else:
+        # Fallback for the first few frames.
+        average_probabilities = current_probabilities
+
+    # Apply the GUI.
+    output_frame = create_GUI(frame, average_probabilities)
+    
+    # If no face is detected, show an error message.
+    if not(len(faces) > 0):
+        cv2.putText(output_frame, "No Face is detected!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
     # Display the frame.
-    cv2.imshow("PC-Camera", frame)
+    cv2.imshow("PC-Camera", output_frame)
 
     # End the program if 'q' pressed.
     if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -513,4 +165,3 @@ while True:
 
 camera.release()
 cv2.destroyAllWindows()
-"""
