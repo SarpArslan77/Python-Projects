@@ -1,4 +1,6 @@
 
+#TODO: fix the bar length in camera implementation
+
 import cv2
 import json
 import os
@@ -48,7 +50,7 @@ EMOTION_CLASSES = {
 }
 
 # Labels for the predictions.
-def create_GUI(frame, predictions):
+def create_gui(frame, predictions):
 
     # Convert tensor to a NumPy array.
     predictions = predictions.squeeze().numpy()
@@ -69,13 +71,39 @@ def create_GUI(frame, predictions):
         cv2.putText(dashboard, text, (10, bar_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         # Draw the bar.
-        bar_width: int = int(prob * (dashboard_width - 130))
+        bar_width: int = int(prob * (dashboard_width - 190))
         cv2.rectangle(dashboard, (180, bar_y + 5), (180 + bar_width, bar_y + 25), color, -1)
 
     # Stitch the camera frame and the dashboard together horizontally.
     combined_frame = np.hstack([frame, dashboard])
 
     return combined_frame
+
+# Draw a color-based bounding box and text label around the face for the dominant emotion.
+def show_dominant_emotion(frame, predictions, coordinates: tuple[int]):
+    canvas = frame.copy()
+    x1, y1, x2, y2 = coordinates
+
+    predictions = predictions.squeeze().numpy()
+
+    # Find the dominant emotion and its probability.
+    top_emotion_index: int = np.argmax(predictions)
+    top_emotion: str = EMOTIONS[top_emotion_index]
+    top_emotion_probability: float = predictions[top_emotion_index]
+
+    # Get the corresponding color.
+    box_color = EMOTION_COLORS.get(top_emotion, (255, 255, 255)) # Default to white
+    # Draw the bounding box.
+    cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, 3)
+    # Create the text label.
+    label = f"{top_emotion}: {top_emotion_probability:.1%}"
+    # Draw a filled background for the text for better readibility.
+    (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+    cv2.rectangle(canvas, (x1, y1-h-15), (x1+w, y1), box_color, -1)
+    # Draw the text on the background.
+    cv2.putText(canvas, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+
+    return canvas
 
 # Camera implementation
 
@@ -105,9 +133,9 @@ while True:
     # Flip the frame horizontally for a mirror-like view
     mirrored_frame = cv2.flip(frame, 1)
     # Turn into gray scale.
-    gray_frame = cv2.cvtColor(mirrored_frame, cv2.COLOR_BGR2GRAY)
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     # Detect faces.
-    faces = faces = face_cascade.detectMultiScale(gray_frame, 1.1, 4)
+    faces = face_cascade.detectMultiScale(gray_frame, 1.1, 4)
     # If there is no face detected, just keep the last result.
     if prediction_history:
         current_probabilities = prediction_history[-1]
@@ -119,9 +147,6 @@ while True:
     if len(faces) > 0:
         # Get the first face found.
         (x, y, w, h) = faces[0]
-
-        # Draw a rectangle around the detected face on the original frame.
-        cv2.rectangle(mirrored_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
 
         # Crop the face from the grayscaled frame.
         cropped_face = gray_frame[y:y+h, x:x+w]
@@ -149,8 +174,12 @@ while True:
         # Fallback for the first few frames.
         average_probabilities = current_probabilities
 
+    # Find the dominant emotion for label box.
+    coordinates: tuple = (x, y, x+w, y+h)
+    output_frame = show_dominant_emotion(frame, average_probabilities, coordinates)
+
     # Apply the GUI.
-    output_frame = create_GUI(frame, average_probabilities)
+    output_frame = create_gui(output_frame, average_probabilities)
     
     # If no face is detected, show an error message.
     if not(len(faces) > 0):
