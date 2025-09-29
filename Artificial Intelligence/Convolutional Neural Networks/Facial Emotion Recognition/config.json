@@ -1,0 +1,25 @@
+{
+    "training_params": {
+        "num_epochs": 10,
+        "batch_size": 64,
+        "starting_learning_rate": 1e-3
+    },
+    "optimizer_params": {
+        "weight_decay": 1e-4
+    },
+    "scheduler_params": {
+        "mode" : "min",
+        "factor": 5e-1,
+        "patience": 5,
+        "min_lr": 1e-5
+    },
+    "early_stopping": {
+        "patience": 1e2,
+        "min_delta": 1e-3
+    },
+    "camera_params" : {
+      "cnn_input_width" : 48,
+      "cnn_input_height" : 48,
+      "prediction_history_len" : 40
+    }
+}
