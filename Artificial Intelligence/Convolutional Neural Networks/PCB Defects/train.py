@@ -12,9 +12,8 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-import intel_extension_for_pytorch as ipex
+#! import intel_extension_for_pytorch as ipex
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
@@ -40,11 +39,12 @@ if __name__ == "__main__":
     model.roi_heads.box_predictor = new_head
 
     # Check whether the Intel XE GPU is available, if not use the CPU.
-    device = torch.device("xpu" if torch.xpu.is_available() else "cpu")
+    """device = torch.device("xpu" if torch.xpu.is_available() else "cpu")"""
+    device = torch.device("cpu")
     print(f"\nActive device: {device}")
 
     # Move the final model to the device.
-    model.to(device)
+    #! model.to(device)
 
     # Define an optimizer and scheduler.
     optimizer = optim.Adam(
@@ -59,12 +59,12 @@ if __name__ == "__main__":
         min_lr = 1e-5 #TODO FTH
     )
 
-    # Apply IPEX optimizations to the model and optimizer.
+    """# Apply IPEX optimizations to the model and optimizer. #TODO Fix the IPEX optimization.
     model, optimizer = ipex.optimize( #TODO HPE
         model = model,
         optimizer = optimizer
     )
-    optimizer: optim.Adam
+    optimizer: optim.Adam"""
 
     parent_folder: str = "C:/Users/Besitzer/Desktop/Python/AI Projects/Convolutional Neural Networks/PCB Defects/PCB_DATASET/"
     # Create the dataloaders for the training and test loops.
@@ -74,8 +74,8 @@ if __name__ == "__main__":
         images_format = "jpg",
         annotations_folder_name = "Annotations",
         random_state_seed = 69,
-        batch_size = 8,
-        num_workers = 2
+        batch_size = 16,
+        num_workers = os.cpu_count() // 2
     )
 
     # Start the training loop.
@@ -110,10 +110,10 @@ if __name__ == "__main__":
             train_annotations: list[dict[str, torch.Tensor]]
 
             # Move the images and annotations to the device first.
-            train_images = train_images.to(device)
+            #! train_images = train_images.to(device)
             train_annotations: list[dict[str, torch.Tensor]] = [
-                {train_key: train_value.to(device) for train_key, train_value in train_annotation_dicts.items()} for train_annotation_dicts in train_annotations
-            ]
+                {train_key: train_value for train_key, train_value in train_annotation_dicts.items()} for train_annotation_dicts in train_annotations
+            ] #!  train_value.to(device)
 
             # Forward pass.
             train_outputs: dict[str, torch.Tensor] = model(train_images, train_annotations)
@@ -125,45 +125,44 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             batch_train_loss.backward()
             optimizer.step()
-        
+
         # Calculate the average epoch loss for training.
         avg_epoch_train_loss: float = sum(epoch_train_losses) / len(epoch_train_losses)
         train_loss_tracker.append(avg_epoch_train_loss)
 
         # Validation phase.
-        epoch_val_losses: list[float] = []
-        model.eval()
-        with torch.no_grad():
-            for val_images, val_annotations in val_loader:
-                val_images: torch.Tensor
-                val_annotations: list[dict[str, torch.Tensor]]
+        if (epoch + 1) % 10 == 0: #TODO FTH
+            epoch_val_losses: list[float] = []
+            model.eval()
+            with torch.no_grad():
+                for val_images, val_annotations in val_loader:
+                    val_images: torch.Tensor
+                    val_annotations: list[dict[str, torch.Tensor]]
 
-                val_images = val_images.to(device)
-                val_annotations: list[dict[str, torch.Tensor]] = [
-                    {val_key: val_value.to(device) for val_key, val_value in val_annotation_dicts.items()} for val_annotation_dicts in val_annotations
-                ]
+                    #! val_images = val_images.to(device)
+                    val_annotations: list[dict[str, torch.Tensor]] = [
+                        {val_key: val_value for val_key, val_value in val_annotation_dicts.items()} for val_annotation_dicts in val_annotations
+                    ] #! val_value.to(device)
 
-                # Temporarily set the model to training mode to enable loss calculation.
-                model.train()
-                val_outputs: dict[str, torch.Tensor] = model(val_images, val_annotations)
-                # Set the model back to validation mode.
-                model.eval()
+                    # Temporarily set the model to training mode to enable loss calculation.
+                    model.train()
+                    val_outputs: dict[str, torch.Tensor] = model(val_images, val_annotations)
+                    # Set the model back to validation mode.
+                    model.eval()
 
-                batch_val_loss: torch.Tensor = sum(loss for loss in val_outputs.values())
-                epoch_val_losses.append(batch_val_loss.item())
+                    batch_val_loss: torch.Tensor = sum(loss for loss in val_outputs.values())
+                    epoch_val_losses.append(batch_val_loss.item())
 
-        # Step the scheduler with the validation loss.
-        avg_epoch_val_loss: float = sum(epoch_val_losses) / len(epoch_val_losses)
-        scheduler.step(avg_epoch_val_loss)
+            # Step the scheduler with the validation loss.
+            avg_epoch_val_loss: float = sum(epoch_val_losses) / len(epoch_val_losses)
+            scheduler.step(avg_epoch_val_loss)
 
-        # Track the average epoch validation loss and new learning rate.
-        val_loss_tracker.append(avg_epoch_val_loss)
-        new_lr: float = optimizer.param_groups[0]["lr"]
-        lr_tracker.append(new_lr)
+            # Track the average epoch validation loss and new learning rate.
+            val_loss_tracker.append(avg_epoch_val_loss)
+            new_lr: float = optimizer.param_groups[0]["lr"]
+            lr_tracker.append(new_lr)
 
-        # Give feedback on the training and validation loops.
-        if epoch % 200 == 0: #TODO FTH
-            print(f"  Avg Train Loss: {avg_epoch_train_loss:.4f} | Avg Validation Loss: {avg_epoch_val_loss:.4f} | New LR: {new_lr}")
+        print(f"  Avg Train Loss: {avg_epoch_train_loss:.4f} | Avg Validation Loss: {avg_epoch_val_loss:.4f} | New LR: {new_lr}")
 
     # Calculate the training time.
     training_end_time = datetime.now() 
