@@ -8,10 +8,12 @@
 #TODO FTH: Fix the hardcoding.
 #TODO AA: Add assertation.
 
+import cv2
 import glob
 import os
 
 import albumentations as A
+from albumentations.pytorch import ToTensorV2
 from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import DataLoader
@@ -19,7 +21,7 @@ import torchvision.transforms as T
 
 from pcb_defect_dataset import PCBDefectDataset
 
-def pcb_defect_collate_fn(batch: list[tuple[torch.Tensor, dict]]) -> tuple[torch.Tensor, tuple[dict]]: #TODO ATH
+def pcb_defect_collate_fn(batch: list[tuple[torch.Tensor, dict]]) -> tuple[torch.Tensor, tuple[dict]]: 
     """
     A custom collate function for the PCB Defect object detection dataset.
 
@@ -118,8 +120,21 @@ def create_dataloaders(
     # Define a transformation pipeline.
     standard_transformation_pipeline = A.Compose(
         [
-            
-        ]
+            A.Resize(
+                height = 480, #TODO FTH
+                width = 480,  #TODO FTH
+                interpolation = cv2.INTER_LINEAR, #TODO FTH
+            ),
+            A.Normalize(
+                mean = [0.5, 0.5, 0.5], #TODO: Replace with dataset's actual mean.
+                std = [0.5, 0.5, 0.5] #TODO Replace with dataset's actual standard deviation.
+            ),
+            ToTensorV2()
+        ],
+        bbox_params = A.BboxParams(
+            format = "pascal_voc", # [x_min, y_min, x_max, y_max]
+            label_fields = ["labels"]
+        )
     )
     #TODO: Add a augmentation transformation pipeline.
 
@@ -159,7 +174,8 @@ def create_dataloaders(
         dataset = train_dataset,
         batch_size = batch_size,
         shuffle = True,
-        num_workers = num_workers, 
+        num_workers = num_workers,
+        pin_memory = True, 
         collate_fn = pcb_defect_collate_fn,
     )
     val_loader = DataLoader(
@@ -167,13 +183,15 @@ def create_dataloaders(
         batch_size = batch_size,
         shuffle = False,
         num_workers = num_workers, 
+        pin_memory = True, 
         collate_fn = pcb_defect_collate_fn,
     )
     test_loader = DataLoader(
         dataset = test_dataset,
         batch_size = batch_size,
         shuffle = False,
-        num_workers = num_workers, 
+        num_workers = num_workers,
+        pin_memory = True,  
         collate_fn = pcb_defect_collate_fn,
     )
 
