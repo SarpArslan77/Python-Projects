@@ -3,6 +3,7 @@
 #TODO ATH: Add type hint.
 #TODO CTH: Check type hint.
 
+import cv2
 from typing import Any
 
 import numpy as np
@@ -47,6 +48,43 @@ class PCBDefectDataset(torch.utils.data.Dataset):
             "spurious_copper" : 6
         }
 
+        # Pre-parse the annotations once.
+        self.targets: list[dict[str, list]] = [] 
+        for ann_pth in self.annotation_paths:
+            # Parse the XML file into a tree structure.
+            tree: ET = ET.parse(ann_pth) 
+            # Get the top level element (a.k.a the 'root'). In this case the <annotation> tag.
+            root: Element = tree.getroot() 
+            
+            boxes: list[list[int, int, int, int]] = []
+            labels: list[int] = []
+
+            # Find all <object> tags in the file.
+            for member in root.findall("object"):
+                # Inside an <object>, find the <name> tag.
+                defect_type: str = member.find("name").text
+                # Map the found defect name into an integer ID.
+                labels.append(self.defect_type_to_id[defect_type])
+
+                # Inside an <object>, find the <bndbox> tag.
+                bndbox: Element = member.find("bndbox") 
+                # Inside the <bndbox>, find each coordinate and convert it to an integer.
+                xmin: int = int(bndbox.find("xmin").text)
+                ymin: int = int(bndbox.find("ymin").text)
+                xmax: int = int(bndbox.find("xmax").text)
+                ymax: int = int(bndbox.find("ymax").text)
+                boxes.append([xmin, ymin, xmax, ymax])
+            self.targets.append(
+                {
+                    "boxes": boxes,
+                    "labels": labels
+                }
+            )
+
+
+
+
+
     def __len__(self) -> int:
         """Returns the total number of samples in the dataset."""
         # Return the total number of samples.
@@ -57,71 +95,32 @@ class PCBDefectDataset(torch.utils.data.Dataset):
             idx: int
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
-        Retrieves the image and its corresponding target dictionary at a given index.
-
-        This method is responsible for loading a single image from a file path,
-        parsing its associated XML annotation file to extract bounding boxes and
-        class labels, and formatting both into the required structure for
-        a object detection models.
+        Loads an image and its annotations, applies transformations, and returns them.
 
         Args:
-            idx (int): The index of the sample to retrieve from the dataset.
+            idx (int): The index of the sample to retrieve.
 
         Returns:
-            A tuple containing:
-                - image (torch.Tensor): The loaded image as a torch.Tensor after transformations.
-                - target (dict[str, torch.Tensor]): A dictionary containing the annotations with the following keys: 
-                'boxes', 'labels', 'idx', and 'area'.
+            A tuple containing the transformed image and a target dictionary. The
+            target dictionary contains the 'boxes', 'labels', 'image_id', and
+            'area' as torch.Tensors.
         """
         # Since the DataSet is only responsible for a single data in the dataset,
         #   we only transform a specific indexed one. DataLoader creates the batches.
         image_path: str = self.image_paths[idx]
+        # Open the image and convert into RGB numpy.
         image = Image.open(image_path).convert("RGB")
+        image_np: NDArray = np.array(image)
 
-        # Load the annotation file.
-        annotation_path: str = self.annotation_paths[idx]
-
-        boxes: list[list[int, int, int, int]] = []
-        labels: list[int] = []
-
-        # Parse the XML file into a tree structure.
-        tree: ET = ET.parse(annotation_path) 
-        # Get the top level element (a.k.a the 'root'). In this case the <annotation> tag.
-        root: Element = tree.getroot() 
-
-        # Find all <object> tags in the file.
-        for member in root.findall("object"):
-            # Inside an <object>, find the <name> tag.
-            defect_type: str = member.find("name").text
-            # Map the found defect name into an integer ID.
-            labels.append(self.defect_type_to_id[defect_type])
-
-            # Inside an <object>, find the <bndbox> tag.
-            bndbox: Element = member.find("bndbox") 
-            # Inside the <bndbox>, find each coordinate and convert it to an integer.
-            xmin: int = int(bndbox.find("xmin").text)
-            ymin: int = int(bndbox.find("ymin").text)
-            xmax: int = int(bndbox.find("xmax").text)
-            ymax: int = int(bndbox.find("ymax").text)
-            boxes.append([xmin, ymin, xmax, ymax])
-
-        # Create the target dictionary.
-        target: dict[str, torch.Tensor] = {} 
-        target["boxes"] = boxes
-        target["labels"] = labels
-        # Turn integer idx to a tensor.
-        idx = torch.tensor([idx])
-        target["image_id"] = idx
-        
-        # Apply the transformation if needed.
+        # Create an shallow copy for the target dictionary.
+        target_shallow = dict(self.targets[idx])
+        # If needed, apply the transformation.
         if self.transforms:
-            # Convert the PIL image to numpy array.
-            image_np: NDArray = np.array(image)
             # Pass data as keyword arguments.
             transformed: dict[str, Any] = self.transforms(
                 image = image_np,
-                bboxes = target["boxes"],
-                labels = target["labels"]
+                bboxes = target_shallow["boxes"],
+                labels = target_shallow["labels"]
             )
             # Albumentations return a dictionary.
             image: NDArray = transformed["image"]
@@ -133,16 +132,16 @@ class PCBDefectDataset(torch.utils.data.Dataset):
                 boxes: torch.Tensor = torch.zeros((0, 4), dtype=torch.float32)
             else:
                 boxes: torch.Tensor = torch.as_tensor(boxes, dtype=torch.float32)
-            target["boxes"] = boxes
-            target["labels"] = torch.as_tensor(labels, dtype=torch.int64)
-            
+            target_shallow["boxes"] = boxes
+            target_shallow["labels"] = torch.as_tensor(labels, dtype=torch.int64)
+            target_shallow["image_id"] = torch.tensor([idx])
+
             # If the box tensor is not empty, calculate the area for each box.
             if boxes.shape[0] > 0:
                 area: torch.Tensor = (boxes[:, 3] - boxes[:, 1]) * (boxes[:, 2] - boxes[:, 0])
             else: # Handle the case without any objects.
                 area = torch.as_tensor([], dtype=torch.float32)
+            target_shallow["area"] = area
 
-            target["area"] = area
-
-        return image, target
+        return image, target_shallow
 
