@@ -108,12 +108,13 @@ if __name__ == "__main__":
         for i, (train_images, train_annotations) in enumerate(train_loader):
             train_images: torch.Tensor
             train_annotations: list[dict[str, torch.Tensor]]
+            print(i)
 
             # Move the images and annotations to the device first.
             #! train_images = train_images.to(device)
-            train_annotations: list[dict[str, torch.Tensor]] = [
+            """train_annotations: list[dict[str, torch.Tensor]] = [
                 {train_key: train_value for train_key, train_value in train_annotation_dicts.items()} for train_annotation_dicts in train_annotations
-            ] #!  train_value.to(device)
+            ] #!  train_value.to(device)"""
 
             # Forward pass.
             train_outputs: dict[str, torch.Tensor] = model(train_images, train_annotations)
