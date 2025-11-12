@@ -16,6 +16,9 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from sklearn.model_selection import train_test_split
 import torch
+torch.set_num_threads(max(1, os.cpu_count()//2))
+# Set the inter-op threads.
+torch.set_num_interop_threads(2)
 from torch.utils.data import DataLoader
 import torchvision.transforms as T
 
@@ -175,7 +178,9 @@ def create_dataloaders(
         batch_size = batch_size,
         shuffle = True,
         num_workers = num_workers,
-        pin_memory = True, 
+        pin_memory = False, # False = CPU and True = GPU.
+        persistent_workers = True, # Keep workers alive between epochs. 
+        prefetch_factor = 2, # Number of batches loader ahead per worker.
         collate_fn = pcb_defect_collate_fn,
     )
     val_loader = DataLoader(
@@ -183,7 +188,9 @@ def create_dataloaders(
         batch_size = batch_size,
         shuffle = False,
         num_workers = num_workers, 
-        pin_memory = True, 
+        pin_memory = False, 
+        persistent_workers = True, 
+        prefetch_factor = 2, 
         collate_fn = pcb_defect_collate_fn,
     )
     test_loader = DataLoader(
@@ -191,7 +198,9 @@ def create_dataloaders(
         batch_size = batch_size,
         shuffle = False,
         num_workers = num_workers,
-        pin_memory = True,  
+        pin_memory = False, 
+        persistent_workers = True, 
+        prefetch_factor = 2, 
         collate_fn = pcb_defect_collate_fn,
     )
 
