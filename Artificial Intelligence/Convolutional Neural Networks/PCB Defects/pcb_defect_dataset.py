@@ -6,11 +6,11 @@
 import cv2
 from typing import Any
 
+import albumentations as A
 import numpy as np
 from numpy.typing import NDArray
-from PIL import Image
+#! from PIL import Image
 import torch
-import torchvision.transforms as T
 
 from xml.etree.ElementTree import Element
 import xml.etree.ElementTree as ET
@@ -19,9 +19,9 @@ import xml.etree.ElementTree as ET
 class PCBDefectDataset(torch.utils.data.Dataset):
     def __init__(
             self,
-            image_paths: list[str],
+            preloaded_images: list[NDArray],
             annotation_paths: list[str],
-            transforms: T.Compose 
+            transforms: A.Compose 
     ) -> None:
         """
         A custom PyTorch Dataset for loading PCB defect images and their annotations.
@@ -30,13 +30,13 @@ class PCBDefectDataset(torch.utils.data.Dataset):
         bounding boxes and class labels for object detection tasks.
 
         Args:
-            image_paths (list[str]): A list of file paths to the images.
+            preloaded_images (list[NDArray]): A list preloaded images.
             annotation_paths (list[str]): A list of file paths to the XML annotations.
             transforms (T.Compose): A transformation pipeline to be applied to the image and target. (Default = None)
         """
-        self.image_paths: list[str] = image_paths
+        self.preloaded_images: list[NDArray] = preloaded_images
         self.annotation_paths: list[str] = annotation_paths
-        self.transforms: T.Compose  = transforms 
+        self.transforms: A.Compose  = transforms 
 
         # Map the defect types to integer ID's.
         self.defect_type_to_id: dict[str, int] = {
@@ -49,7 +49,7 @@ class PCBDefectDataset(torch.utils.data.Dataset):
         }
 
         # Pre-parse the annotations once.
-        self.targets: list[dict[str, list]] = [] 
+        self.targets: list[dict[str, Any]] = [] 
         for ann_pth in self.annotation_paths:
             # Parse the XML file into a tree structure.
             tree: ET = ET.parse(ann_pth) 
@@ -80,15 +80,14 @@ class PCBDefectDataset(torch.utils.data.Dataset):
                     "labels": labels
                 }
             )
-
-
-
-
+        
+        # Convert list type of targets into tensor.
+        
 
     def __len__(self) -> int:
-        """Returns the total number of samples in the dataset."""
-        # Return the total number of samples.
-        return len(self.image_paths)
+        """Returns the total number of preloaded images in the dataset."""
+        # Return the total number of preloaded images.
+        return len(self.preloaded_images)
 
     def __getitem__(
             self,
@@ -105,27 +104,30 @@ class PCBDefectDataset(torch.utils.data.Dataset):
             target dictionary contains the 'boxes', 'labels', 'image_id', and
             'area' as torch.Tensors.
         """
-        # Since the DataSet is only responsible for a single data in the dataset,
-        #   we only transform a specific indexed one. DataLoader creates the batches.
-        image_path: str = self.image_paths[idx]
-        # Open the image and convert into RGB numpy.
-        image = Image.open(image_path).convert("RGB")
-        image_np: NDArray = np.array(image)
+
+        # Get the image directly from the preloaded list in RAM.
+        image_np: NDArray = self.preloaded_images[idx]
 
         # Create an shallow copy for the target dictionary.
         target_shallow = dict(self.targets[idx])
+        
+        boxes = target_shallow["boxes"]
+        labels = target_shallow["labels"]
+
         # If needed, apply the transformation.
         if self.transforms:
+   
             # Pass data as keyword arguments.
             transformed: dict[str, Any] = self.transforms(
-                image = image_np,
-                bboxes = target_shallow["boxes"],
-                labels = target_shallow["labels"]
+                image = image_np, # Pass the manually resized image.
+                bboxes = boxes, # Pass the manually resized boxes.
+                labels = labels
             )
             # Albumentations return a dictionary.
             image: NDArray = transformed["image"]
             # In case the image does not have any bounding boxes(so no defects), we should use .get()
-            boxes: list[list[float]] = transformed.get("boxes", []) # If the key is missing, it returns a default empty list.
+            boxes: list[list[float]] = transformed.get("bboxes", []) # If the key is missing, it returns a default empty list.
+            
             labels: list[int] = transformed.get("labels", [])
             # Update the transformed image with new info of bounding boxes and labels.
             if not boxes: # If there are not bounded boxes, make sure that the shape is still [0, 4].
