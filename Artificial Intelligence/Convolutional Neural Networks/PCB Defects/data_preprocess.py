@@ -1,6 +1,4 @@
 
-#TODO Change the transformation pipeline to using albumentations library.
-
 #! Custom TODO notes:
 #TODO AD: Add docstring.
 #TODO ATH: Add type hint.
@@ -11,18 +9,42 @@
 import cv2
 import glob
 import os
+from typing import Any
 
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from numpy.typing import NDArray
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 import torch
-torch.set_num_threads(max(1, os.cpu_count()//2))
-# Set the inter-op threads.
-torch.set_num_interop_threads(2)
 from torch.utils.data import DataLoader
-import torchvision.transforms as T
 
 from pcb_defect_dataset import PCBDefectDataset
+
+def preload_images(
+        image_paths: list[str],
+) -> list[NDArray]:
+    """
+    Loads all images from a list of paths into RAM.
+
+    Args:
+        image_paths (list[str]): A sorted list of file paths to the images.
+
+    Returns:
+        list[np.ndarray]: A list of images, where each image is a NumPy array in RGB format.
+    """
+
+    preloaded_images: list[NDArray] = []
+    print("\nPreloading images into RAM...")
+    for image_path in tqdm(image_paths, desc="Preloading Images", unit=" img"):
+        # Read the image using OpenCV.
+        image: NDArray = cv2.imread(image_path)
+        # Convert from BGR to RGB to match the standard formats.
+        image_rgb: NDArray = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        preloaded_images.append(image_rgb)
+    
+    print("Image preloading complete!")
+    return preloaded_images
 
 def pcb_defect_collate_fn(batch: list[tuple[torch.Tensor, dict]]) -> tuple[torch.Tensor, tuple[dict]]: 
     """
@@ -48,10 +70,11 @@ def pcb_defect_collate_fn(batch: list[tuple[torch.Tensor, dict]]) -> tuple[torch
     return images_tensor, annotations
 
 def create_dataloaders( 
-        parent_folder: str,
+        parent_folder_path: str,
         images_folder_name: str,
         images_format: str,
         annotations_folder_name: str,
+        device: torch.device,
         random_state_seed: int,
         batch_size: int,
         num_workers: int
@@ -77,8 +100,8 @@ def create_dataloaders(
     """
 
     # Check whether the parent folder exists.
-    if not os.path.isdir(parent_folder):
-        raise FileNotFoundError(f"The specified parent folder does not exist at: {parent_folder} .")
+    if not os.path.isdir(parent_folder_path):
+        raise FileNotFoundError(f"The specified parent folder does not exist at: {parent_folder_path} .")
     # Check whether the batch size is a positive integer.
     if batch_size <= 0:
         raise ValueError(f"batch_size must be a positive integer, but got {batch_size} .")
@@ -87,7 +110,7 @@ def create_dataloaders(
         raise ValueError(f"num_workers must be a non-negative integer, but got {num_workers} .")
 
     # Construct the pattern for the recursive search.
-    images_folder_path: str = os.path.join(parent_folder, f"{images_folder_name}/") 
+    images_folder_path: str = os.path.join(parent_folder_path, f"{images_folder_name}/") 
     image_pattern: str = os.path.join(
         images_folder_path,
         "**",
@@ -101,7 +124,7 @@ def create_dataloaders(
     # Sort the list, ensuring the correct pairing with the annotations.
     image_paths.sort()
     # Repeat the same search for annotation paths.
-    annotations_folder_path: str = os.path.join(parent_folder, f"{annotations_folder_name}/")
+    annotations_folder_path: str = os.path.join(parent_folder_path, f"{annotations_folder_name}/")
     annotation_pattern: str = os.path.join(
         annotations_folder_path,
         "**",
@@ -112,7 +135,7 @@ def create_dataloaders(
         recursive = True
     )
     annotation_paths.sort()
-    
+
     # Assert, that images do exist.
     assert len(image_paths) > 0, \
     f"No images were found in {images_folder_path}"
@@ -124,8 +147,8 @@ def create_dataloaders(
     standard_transformation_pipeline = A.Compose(
         [
             A.Resize(
-                height = 480, #TODO FTH
-                width = 480,  #TODO FTH
+                height = 600, #TODO FTH
+                width = 600,  #TODO FTH
                 interpolation = cv2.INTER_LINEAR, #TODO FTH
             ),
             A.Normalize(
@@ -134,16 +157,19 @@ def create_dataloaders(
             ),
             ToTensorV2()
         ],
-        bbox_params = A.BboxParams(
-            format = "pascal_voc", # [x_min, y_min, x_max, y_max]
-            label_fields = ["labels"]
-        )
+        bbox_params = {
+            "format": "pascal_voc", # [x_min, y_min, x_max, y_max]
+            "label_fields": ["labels"]
+        }
     )
     #TODO: Add a augmentation transformation pipeline.
 
+    # Preload all images into memory using the paths.
+    all_images_preloaded: list[NDArray] = preload_images(image_paths)
+
     # Split the data into training (70%), validation (%15) and test(%15).
     X_train, X_val_and_test, y_train, y_val_and_test = train_test_split(
-        image_paths,
+        all_images_preloaded,
         annotation_paths,
         test_size = 0.3,
         random_state = random_state_seed  # Ensures, that the data is split in the exact same way every time.
@@ -155,19 +181,44 @@ def create_dataloaders(
         random_state = random_state_seed
     )
 
+    # Define common keyword arguments about multiprocessing for the dataloaders.
+    loader_kwargs: dict[str, Any] = {
+        "num_workers": 0,
+        "pin_memory": False, # False = CPU and True = GPU.
+        "persistent_workers": False, # Keep workers alive between epochs. 
+        "prefetch_factor": None # Number of batches loader ahead per worker.
+    }
+    # Add multiprocessing-specific arguments, only if 'num_workers' > 0.
+    if num_workers > 0:
+        loader_kwargs.update(
+            {
+                "num_workers": num_workers,
+                "persistent_workers": True,
+                "prefetch_factor": 2 #TODO FTH
+            }
+        )
+    # Add GPU-spesific arguments, only if 'device' is not cpu.
+    if device.type != "cpu":
+        loader_kwargs.update(
+            {
+                "pin_memory": True
+            }
+        )
+
     # Create the datasets.
     train_dataset = PCBDefectDataset(
-        image_paths = X_train,
+        preloaded_images = X_train,
         annotation_paths = y_train,
         transforms = standard_transformation_pipeline
     )
+
     val_dataset = PCBDefectDataset(
-        image_paths = X_val,
+        preloaded_images = X_val,
         annotation_paths = y_val,
         transforms = standard_transformation_pipeline
     )
     test_dataset = PCBDefectDataset(
-        image_paths = X_test,
+        preloaded_images = X_test,
         annotation_paths = y_test,
         transforms = standard_transformation_pipeline
     )
@@ -177,31 +228,22 @@ def create_dataloaders(
         dataset = train_dataset,
         batch_size = batch_size,
         shuffle = True,
-        num_workers = num_workers,
-        pin_memory = False, # False = CPU and True = GPU.
-        persistent_workers = True, # Keep workers alive between epochs. 
-        prefetch_factor = 2, # Number of batches loader ahead per worker.
         collate_fn = pcb_defect_collate_fn,
+        **loader_kwargs
     )
     val_loader = DataLoader(
         dataset = val_dataset,
         batch_size = batch_size,
         shuffle = False,
-        num_workers = num_workers, 
-        pin_memory = False, 
-        persistent_workers = True, 
-        prefetch_factor = 2, 
         collate_fn = pcb_defect_collate_fn,
+        **loader_kwargs
     )
     test_loader = DataLoader(
         dataset = test_dataset,
         batch_size = batch_size,
         shuffle = False,
-        num_workers = num_workers,
-        pin_memory = False, 
-        persistent_workers = True, 
-        prefetch_factor = 2, 
         collate_fn = pcb_defect_collate_fn,
+        **loader_kwargs
     )
 
     return train_loader, val_loader, test_loader
