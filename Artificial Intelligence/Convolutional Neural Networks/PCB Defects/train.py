@@ -1,4 +1,6 @@
 
+#TODO Add testing loop at the end.
+
 #! Custom TODO notes:
 #TODO AD: Add docstring.
 #TODO ATH: Add type hint.
@@ -12,7 +14,9 @@ import os
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 #! import intel_extension_for_pytorch as ipex
+from sklearn.metrics import classification_report, confusion_matrix
 import torch
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 import torch.optim as optim
@@ -21,10 +25,6 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
 from data_preprocess import create_dataloaders
 from graph import plot_graph
-
-import matplotlib.pyplot as plt
-import torchvision.utils
-import numpy as np
 
 def train(
         optimizer_params: dict[str, Any],
@@ -129,6 +129,10 @@ def train(
         box_format = "xyxy",
         iou_type = "bbox"
     )
+    test_metric = MeanAveragePrecision(
+        box_format = "xyxy",
+        iou_type = "bbox"
+    )
 
     # Start the training loop.
     print("\nStarting Training!")
@@ -203,7 +207,7 @@ def train(
         train_loss_rpn_box_reg_tracker.append(avg_epoch_loss_rpn_box_reg_loss)
         avg_epoch_loss_classifier_loss: float = sum(epoch_loss_classifier_losses) / len(epoch_loss_classifier_losses)
         train_loss_classifier_tracker.append(avg_epoch_loss_classifier_loss)
-        avg_epoch_loss_box_reg_loss: float = sum() / len()
+        avg_epoch_loss_box_reg_loss: float = sum(epoch_loss_box_reg_losses) / len(epoch_loss_box_reg_losses)
         train_loss_box_reg_tracker.append(avg_epoch_loss_box_reg_loss)
 
         if (epoch + 1) % train_progress_print_frequency == 0:
@@ -211,7 +215,7 @@ def train(
             print(f"   Objectness Loss: {avg_epoch_loss_objectness_loss:.4f}")
             print(f"   Proposal Bounding Box Loss: {avg_epoch_loss_rpn_box_reg_loss:.4f}")
             print(f"   Final Classification Loss: {avg_epoch_loss_classifier_loss:.4f}")
-            print(f"   Final Bounding Box Loss: {train_loss_box_reg_tracker:.4f}")
+            print(f"   Final Bounding Box Loss: {avg_epoch_loss_box_reg_loss:.4f}")
 
         # Validation phase.
         if (epoch + 1) % val_frequency == 0: 
@@ -232,7 +236,7 @@ def train(
 
             # Compute the mAP over all validation batches.
             val_results: dict[str, torch.Tensor] = val_metric.compute()
-            val_map = val_results["map"].item() # Get the main mAP score.
+            val_map: float = val_results["map"].item() # Get the main mAP score.
             val_map_tracker.append(val_map)
 
             # Reset the metric for the next validation run.
@@ -289,6 +293,65 @@ def train(
         show_graph = True
     )
 
+    # Test phase.
+    print("\nStarting with testing...")
+    # The test parameters are:
+    #   1) Mean Average Precision (mAP): 
+    #   2) Per-Class Performance: 
+    model.eval()
+    with torch.no_grad():
+        # Trackers for the test parameters.
+        true_labels: list[int] = []
+        predicted_labels: list[int] = []
+
+        for test_images, test_annotations in test_loader:
+            test_images: torch.Tensor
+            test_annotations: list[dict[str, torch.Tensor]]
+
+            # Add the true labels to the tracker.
+            [true_labels.extend(torch.Tensor.tolist(test_annotation["labels"])) for test_annotation in test_annotations]
+
+            # Get model predictions.
+            test_predictions: dict[str, torch.Tensor] = model(test_images)
+
+            # Add the predicted labels to the tracker.
+            [predicted_labels.extend(torch.Tensor.tolist(test_prediction["labels"])) for test_prediction in test_predictions]
+
+            # Update the metric with the predictions and ground truths for the current batch.
+            test_metric.update(
+                preds = test_predictions,
+                target = test_annotations
+            )
+
+        # 1) Compute the mAP.
+        test_results: dict[str, torch.Tensor] = test_metric.compute()
+        test_map: float = test_results["map"].item() # Get the main mAP score.
+
+        # Reset the test metric, just in case.
+        test_metric.reset()
+
+        print(f"\n Avg Test mAP: {test_map:.4f}")
+
+        # 2) Compute the Per-Class Performance.
+        y_true: NDArray = np.array(true_labels, dtype=torch.int8)
+        y_predicted: NDArray = np.array(predicted_labels, dtype=torch.int8)
+
+        # Create an classification report.
+        classification_report_summary = classification_report(
+            y_true,
+            y_predicted,
+            output_dict = True
+        )
+        # Convert the report to DataFrame and e
+
+
+
+
+
+    
+
+
+
 if __name__ == "__main__":
     
     # Prepare the parameters.
@@ -316,7 +379,7 @@ if __name__ == "__main__":
     }
     train_and_val_params: dict[str, int] = {
         "num_epochs": 20,
-        "train_progress_print_frequency": 5,
+        "train_progress_print_frequency": 1,
         "val_frequency": 20,
         "checkpoint_save_frequency": 5
     }
