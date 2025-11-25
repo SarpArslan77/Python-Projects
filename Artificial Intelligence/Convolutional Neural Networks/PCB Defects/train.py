@@ -13,9 +13,12 @@ from datetime import datetime
 import os
 from typing import Any
 
+import matplotlib.axes
+import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
 #! import intel_extension_for_pytorch as ipex
+import pandas as pd
 from sklearn.metrics import classification_report, confusion_matrix
 import torch
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
@@ -24,12 +27,13 @@ import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
 from data_preprocess import create_dataloaders
-from graph import plot_graph
+from graph import plot_graph, plot_heatmap
 
 def train(
         optimizer_params: dict[str, Any],
         dataloader_params: dict[str, Any],
-        train_and_val_params: dict[str, int]
+        train_and_val_params: dict[str, int],
+        saved_checkpoint: dict[str, Any] = None,
 ) -> None:
     """
     Trains and validates a Faster R-CNN object detection model.
@@ -45,8 +49,10 @@ def train(
         dataloader_params (dict[str, Any]): Parameters for data paths and loaders.
         train_and_val_params (dict[str, int]): Parameters for the training loop,
             like number of epochs and validation frequency.
+        saved_checkpoint (dict[str, Any]): Checkpoint of an saved model, in order to
+            continue with the training.
     """
-    
+
     # Unpack the parameters.
     lr: float = optimizer_params["lr"]
     factor: float = optimizer_params["factor"]
@@ -86,9 +92,6 @@ def train(
     # Replace the old box_predictor with our new custom one.
     model.roi_heads.box_predictor = new_head
 
-    # Move the final model to the device.
-    #! model.to(device)
-
     # Define an optimizer and scheduler.
     optimizer = optim.Adam(
         params = model.parameters(),
@@ -103,15 +106,32 @@ def train(
         min_lr = min_lr 
     )
 
-    # Apply IPEX optimizations to the model and optimizer. #TODO Fix the IPEX optimization.
-    """
-    model, optimizer = ipex.optimize( #TODO HPE
-        model = model,
-        optimizer = optimizer
-    )
-    optimizer: optim.Adam
-    """
+    # The training starts from the first epoch.
+    start_epoch: int = 1
 
+    # Initialize the tracking paramaters as empty.
+    lr_tracker: list[float] = []
+
+    train_overall_loss_tracker: list[float] = []
+    train_loss_objectness_tracker: list[float] = []
+    train_loss_rpn_box_reg_tracker: list[float] = []
+    train_loss_classifier_tracker: list[float] = []
+    train_loss_box_reg_tracker: list[float] = []
+
+    val_map_tracker: list[float] = [] # Mean Average Precision.    
+
+    if saved_checkpoint: # If an already existent training is being continued.
+        # Unpack the variables from the checkpoint.
+        start_epoch = saved_checkpoint["epoch"]
+
+        model.load_state_dict(saved_checkpoint["model_state_dict"])
+        optimizer.load_state_dict(saved_checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(saved_checkpoint["scheduler_state_dict"])
+
+        train_overall_loss_tracker = saved_checkpoint["train_overall_loss_tracker"]
+        val_map_tracker = saved_checkpoint["val_map_tracker"]
+        lr_tracker = saved_checkpoint["lr_tracker"]
+        
     # Create the dataloaders for the training and test loops.
     train_loader, val_loader, test_loader = create_dataloaders( 
         parent_folder_path = parent_folder_path,
@@ -148,17 +168,7 @@ def train(
     except FileExistsError:
         print("A Directory with an exact name exists.")
 
-    # Tracking parameters for the graph.
-    lr_tracker: list[float] = []
-    train_overall_loss_tracker: list[float] = []
-    train_loss_objectness_tracker: list[float] = []
-    train_loss_rpn_box_reg_tracker: list[float] = []
-    train_loss_classifier_tracker: list[float] = []
-    train_loss_box_reg_tracker: list[float] = []
-
-    val_map_tracker: list[float] = [] # Mean Average Precision.
-
-    for epoch in range(num_epochs): 
+    for epoch in range(start_epoch, num_epochs): 
         print(f"\nEpoch : {epoch+1} / {num_epochs}")
         # Set the model into training mode.
         epoch_overall_train_losses: list[float] = []
@@ -261,7 +271,7 @@ def train(
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
-                "train_loss_tracker": train_overall_loss_tracker,
+                "train_overall_loss_tracker": train_overall_loss_tracker,
                 "val_map_tracker": val_map_tracker,
                 "lr_tracker": lr_tracker
             }
@@ -282,9 +292,23 @@ def train(
     training_time: tuple[float, float, float] = (training_hours, training_minutes, training_seconds)
     print(f"\nFinished Training!\nTraining Time: {int(training_hours):02d}:{int(training_minutes):02d}:{int(training_seconds):02d}")
 
+    # Create the figure and axes object for the graphs.
+    fig, ((train_loss_ax, val_map_ax), (cr_ax, cm_ax)) = plt.subplots(
+        nrows = 2,
+        ncols = 2,
+        figsize = (10, 10)
+    )
+    train_loss_ax: matplotlib.axes.Axes
+    val_map_ax: matplotlib.axes.Axes
+    cr_ax: matplotlib.axes.Axes
+    cm_ax: matplotlib.axes.Axes
+
     # Create a graph for the trial.
     print("\nCreating and saving a graph for the loss and learning rate progress...")
+    loss_axes = (train_loss_ax, val_map_ax)
     plot_graph(
+        fig = fig,
+        loss_axes = loss_axes,
         num_epochs = num_epochs,
         training_time = training_time,
         train_loss_history = np.array(train_overall_loss_tracker),
@@ -297,7 +321,8 @@ def train(
     print("\nStarting with testing...")
     # The test parameters are:
     #   1) Mean Average Precision (mAP): 
-    #   2) Per-Class Performance: 
+    #   2) Classification Report (CR).
+    #   3) Confusion Matrix (CM).
     model.eval()
     with torch.no_grad():
         # Trackers for the test parameters.
@@ -332,25 +357,60 @@ def train(
 
         print(f"\n Avg Test mAP: {test_map:.4f}")
 
-        # 2) Compute the Per-Class Performance.
+        # Compute the Per-Class Performance.
         y_true: NDArray = np.array(true_labels, dtype=torch.int8)
         y_predicted: NDArray = np.array(predicted_labels, dtype=torch.int8)
 
-        # Create an classification report.
+        # 2) Create an classification report (CR).
         classification_report_summary = classification_report(
-            y_true,
-            y_predicted,
+            y_true = y_true,
+            y_predicted = y_predicted,
             output_dict = True
         )
-        # Convert the report to DataFrame and e
+        # Convert the report to DataFrame and exclude the accuracy row.
+        cr_report_df = pd.DataFrame(classification_report_summary).transpose()
+        # Remove accuracy and support columns.
+        cr_x_labels: list[str] = ["precision", "recall", "f1-score"]
+        cr_heatmap_df = cr_report_df[cr_x_labels].iloc[:-3]
+        defect_labels: list[str] = ["missing_hole", "mouse_bite", "open_circuit", "short", "spur", "spurious_copper"]
+        # Plot the CR as heatmap.
+        plot_heatmap( #TODO FTH
+            data = cr_heatmap_df,
+            annot = True,
+            fmt = ".1%",
+            annot_kws = {"size":8},
+            cmap = "Blues",
+            xticklabels = cr_x_labels,
+            yticklabels = defect_labels,
+            ax = cr_ax,
+            title = "Classification Report",
+            x_label = "Variable",
+            y_label = "Defect Type"
+        )
 
+        # 3) Create an Confusion Matrix (CM).
+        confusion_matrix_report = confusion_matrix(
+            y_true = y_true,
+            y_predicted = y_predicted,
+            normalize = "true" # Shows percentages in the units.
+        )
+        # Plot the CM as heatmap.
+        plot_heatmap(
+            data = confusion_matrix_report,
+            annot = True,
+            fmt = ".1%",
+            annot_kws = {"size":8},
+            cmap = "Reds",
+            xticklabels = defect_labels,
+            yticklabels = defect_labels,
+            ax = cm_ax,
+            title = "Normalized Confusion Matrix",
+            x_label = "Predicted Emotion",
+            y_label = "True Emotion"
+        )
 
-
-
-
-    
-
-
+        # Automatically adjust the gaps between graphs, to prevent text overlapping.
+        plt.tight_layout(pad=3.0)
 
 if __name__ == "__main__":
     
@@ -384,11 +444,19 @@ if __name__ == "__main__":
         "checkpoint_save_frequency": 5
     }
 
+    #! This part determines whether we are continiung the training from a saved checkpoint.
+    use_checkpoint: bool = False
+    if use_checkpoint:
+        saved_checkpoint_path: str = "C:/Users/Besitzer/Desktop/Python/AI Projects/Convolutional Neural Networks/PCB Defects/Trials",
+
+        
+
     # Initialize the training method.
     train(
         optimizer_params,
         dataloader_params,
-        train_and_val_params
+        train_and_val_params,
+        saved_checkpoint = saved_checkpoint,
     )
 
 
