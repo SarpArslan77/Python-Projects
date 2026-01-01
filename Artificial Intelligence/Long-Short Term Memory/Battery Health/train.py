@@ -34,6 +34,22 @@ from lstm import LSTM
 
 @dataclass
 class ConfigTrainer:
+    """
+    Configuration dataclass for the training process.
+
+    Attributes:
+        dataloaders (tuple): A tuple containing (train_loader, val_loader, test_loader).
+        learning_rate (float): The learning rate for the Adam optimizer.
+        num_epochs (int): Total number of training epochs.
+        max_norm (float): Maximum norm for gradient clipping to prevent exploding gradients.
+        print_freq (int): Frequency (in epochs) to print training statistics to console.
+        val_freq (int): Frequency (in epochs) to run validation.
+        save_checkpoint_freq (int): Frequency (in epochs) to save model checkpoints.
+        model_save_path (str): Directory path where model checkpoints will be stored.
+        saved_checkpoint (dict | None): Optional dictionary containing a loaded checkpoint state to resume training.
+        show_graph (bool): Whether to display loss graphs after training (default: True).
+    """
+
     dataloaders: tuple[DataLoader, DataLoader, DataLoader]
     learning_rate: float
     num_epochs: int
@@ -99,13 +115,38 @@ class ConfigTrainer:
         if not isinstance(self.show_graph, bool):
             raise TypeError(f"show_graph must be a boolean, got {type(self.show_graph).__name__}.")   
 
+# Define custom type hints.
+History = tuple[NDArray, NDArray]
 
 class Trainer():
+    """
+    Manages the full training lifecycle of the LSTM model.
+
+    This class handles:
+    1. Training and Validation loops.
+    2. Metric calculation (MSE, RMSE, R2, MAE).
+    3. Checkpoint saving and loading.
+    4. Gradient optimization and clipping.
+    5. History tracking for visualization.
+    """
+
     def __init__(
             self,
             config_trainer: ConfigTrainer,
             model: LSTM
     ) -> None:
+        """
+        Initializes the Trainer.
+
+        Sets up the optimizer (Adam), Loss Function (MSE), and history trackers.
+        If a checkpoint is provided in the config, it restores the model state,
+        optimizer state, and loss histories to resume training.
+
+        Args:
+            config_trainer (ConfigTrainer): Configuration object with hyperparameters and paths.
+            model (LSTM): The PyTorch model instance to train.
+        """
+
         # Define the input parameters.
         self.cfg: ConfigTrainer = config_trainer
         self.train_loader, self.val_loader, self.test_loader = self.cfg.dataloaders
@@ -148,6 +189,18 @@ class Trainer():
             self,
             train_start_time: datetime
     ) -> str | None:
+        """
+        Creates a timestamped subdirectory for saving model checkpoints.
+
+        Format: 'YYYY-MM-DD_HH-MM'.
+
+        Args:
+            train_start_time (datetime): The timestamp of when training started.
+
+        Returns:
+            str | None: The path to the created folder if successful, else None.
+        """
+
         # 1. Extract the folder name and path.
         trial_folder_name: str = train_start_time.strftime(format="%Y-%m-%d_%H-%M")
         trial_folder_path: str = os.path.join(self.cfg.model_save_path, trial_folder_name)
@@ -166,10 +219,28 @@ class Trainer():
 
     def _calculate_losses(
             self,
-            losses: Tensor,
+            losses: list[float],
             targets: Tensor,
             logits: Tensor
     ) -> tuple[float, float, float, float]:
+        """
+        Calculates regression performance metrics.
+
+        Computes:
+        1. Average Loss (MSE) from the per-batch loss list.
+        2. RMSE (Root Mean Squared Error).
+        3. R^2 Score (Coefficient of Determination).
+        4. MAE (Mean Absolute Error).
+
+        Args:
+            losses (list[float]): List of scalar loss values from every batch in the epoch.
+            targets (Tensor): Ground truth values (concatenated from all batches).
+            logits (Tensor): Model predictions (concatenated from all batches).
+
+        Returns:
+            tuple[float, float, float, float]: (Avg Loss, RMSE, R2, MAE).
+        """
+
         # Calculate the average loss.
         avg_loss: float = sum(losses) / len(losses)
         
@@ -185,6 +256,17 @@ class Trainer():
         return (avg_loss, rmse_loss, r2_loss, mae_loss)
 
     def _train_one_epoch(self) -> tuple[float, float, float, float]:
+        """
+        Runs one complete training epoch.
+
+        Performs forward pass, loss calculation, backpropagation, gradient clipping,
+        and optimizer updates. Tracks metrics for the entire epoch.
+
+        Returns:
+            tuple[float, float, float, float]: The aggregated training metrics 
+            (Avg Loss, RMSE, R2, MAE) for this epoch.
+        """
+
         # 1. Open the training mode.
         self.model.train()
 
@@ -230,7 +312,18 @@ class Trainer():
         return (train_avg_loss, train_rmse_loss, train_r2_loss, train_mae_loss)
 
     def _validate_one_epoch(self) -> tuple[float, float, float, float]:
-        with torch.no_grad(): #TODO What does it do?
+        """
+        Runs one complete validation epoch.
+
+        Disables gradient calculation (torch.no_grad) and model dropout (model.eval).
+        Used to monitor model performance on unseen data without updating weights.
+
+        Returns:
+            tuple[float, float, float, float]: The aggregated validation metrics 
+            (Avg Loss, RMSE, R2, MAE) for this epoch.
+        """
+
+        with torch.no_grad(): # Stops the tracking the history of operations.
             # 1. Open the evaluation mode for the validation.
             self.model.eval()
 
@@ -267,6 +360,19 @@ class Trainer():
             trial_folder_path: str,
             current_epoch: int
     ) -> tuple[dict[str, Any], str]:
+        """
+        Bundles the current model state and training history into a checkpoint dictionary.
+
+        Args:
+            trial_folder_path (str): The directory where the checkpoint file will be saved.
+            current_epoch (int): The current epoch index (0-based).
+
+        Returns:
+            tuple[dict[str, Any], str]: A tuple containing:
+                - checkpoint (dict): The dictionary containing model/optimizer states and history.
+                - checkpoint_path (str): The full file path where the .pth file will be written.
+        """
+
         # 1. Create the checkpoint path.
         checkpoint_path: str = os.path.join(trial_folder_path, f"model_epoch_{current_epoch+1}.pth")
 
@@ -286,7 +392,23 @@ class Trainer():
         return (checkpoint, checkpoint_path)
 
 
-    def fit(self) -> tuple[tuple[list[float], list[float], list[float], list[float]], tuple[list[float], list[float], list[float], list[float]], tuple[float, float, float]]:
+    def fit(self) -> tuple[History, History, History, History, tuple[float, float, float], str]:
+        """
+        Executes the main training loop.
+
+        Orchestrates the process of:
+        1. Training for `num_epochs`.
+        2. Logging metrics to console.
+        3. Running validation at specified frequencies.
+        4. Saving checkpoints to disk.
+
+        Returns:
+            tuple: A tuple containing:
+                - train_history (tuple): Arrays of training metrics (Loss, RMSE, R2, MAE).
+                - val_history (tuple): Arrays of validation metrics (Loss, RMSE, R2, MAE).
+                - train_time (tuple): Elapsed training time (Hours, Minutes, Seconds).
+        """
+
         # 1. Start the training loop.
         print("\nStarting with Training!")
 
@@ -325,8 +447,7 @@ class Trainer():
             if validate_this_epoch:
                 val_avg_loss, val_rmse_loss, val_r2_loss, val_mae_loss = self._validate_one_epoch()
 
-                print(f"\nEpoch: {epoch+1}/{self.cfg.num_epochs}")
-                print(f" Validation Losses:")
+                print(f"\n Validation Losses:")
                 print(f" -> Average: {val_avg_loss:.4f}")
                 print(f" -> RMSE: {val_rmse_loss:.4f}")
                 print(f" -> R^2: {val_r2_loss:.4f}")
@@ -362,8 +483,45 @@ class Trainer():
         # Pack all the times in a tuple for the title of the graph.
         train_time: tuple[float, float, float] = (train_hour, train_min, train_sec)
         print(f"\nFinished Training!")
-        print(f" Training Time: {int(train_hour):02d}:{int(train_min):02d}:{int(train_sec):02d}") # TODO What are those 02 and d mean?
+        print(f" Training Time: {int(train_hour):02d}:{int(train_min):02d}:{int(train_sec):02d}") # 0: Pad with zeros. & 2: Min width of charachters. & d: Input is a int. => (5 -> 05) and 12 stays.
 
-        #TODO Continue here...
-            
+        # 5. Convert all the lists into tuples.
+        train_avg_loss_history_np: NDArray = np.array(self.train_avg_loss_history)
+        train_rmse_loss_history_np: NDArray = np.array(self.train_rmse_loss_history)
+        train_r2_loss_history_np: NDArray = np.array(self.train_r2_loss_history)
+        train_mae_loss_history_np: NDArray = np.array(self.train_mae_loss_history)
 
+        val_avg_loss_history_np: NDArray = np.array(self.val_avg_loss_history)
+        val_rmse_loss_history_np: NDArray = np.array(self.val_rmse_loss_history)
+        val_r2_loss_history_np: NDArray = np.array(self.val_r2_loss_history)
+        val_mae_loss_history_np: NDArray = np.array(self.val_mae_loss_history)
+
+        # Pack all the loss histories into tuples.
+        avg_loss_history: tuple[NDArray, NDArray] = (train_avg_loss_history_np, val_avg_loss_history_np)
+        rmse_loss_history: tuple[NDArray, NDArray] = (train_rmse_loss_history_np, val_rmse_loss_history_np)
+        r2_loss_history: tuple[NDArray, NDArray] = (train_r2_loss_history_np, val_r2_loss_history_np)
+        mae_loss_history: tuple[NDArray, NDArray] = (train_mae_loss_history_np, val_mae_loss_history_np)
+
+        return (avg_loss_history, rmse_loss_history, r2_loss_history, mae_loss_history, train_time, trial_folder_path)
+    
+    def test(self) -> None:
+        print("\n Starting with testing!")
+
+        with torch.no_grad():
+            # 1. Open the evaluation mode for the testing.
+            self.model.eval()
+
+            # 2. Create trackers for the test predictions and targets.
+            test_logits: list[Tensor] = []
+            test_targets: list[Tensor] = []
+
+            # 3. Iterate over the test dataset.
+            for test_input, test_target in self.test_loader:
+                # Forward pass.
+                test_logit: Tensor = self.model(test_input)
+
+                # Track the variables.
+                test_logits.append(test_logit.detach())
+                test_targets.append(test_target)
+
+            # TODO Continue here...
