@@ -25,12 +25,15 @@ from sklearn.metrics import (
 import torch
 import torch.nn as nn
 from torch.nn import MSELoss
+from torch.nn.functional import mse_loss
 from torch.nn.utils import clip_grad_norm_
 from torch import Tensor
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
 from lstm import LSTM
+
 
 @dataclass
 class ConfigTrainer:
@@ -40,6 +43,10 @@ class ConfigTrainer:
     Attributes:
         dataloaders (tuple): A tuple containing (train_loader, val_loader, test_loader).
         learning_rate (float): The learning rate for the Adam optimizer.
+        mode (str): The metric for the scheduler.
+        factor (float): Decreasing factor for learning rate for the scheduler.
+        patience (int): Number of epochs without improvement, after which the learning rate will be reduced.
+        min_lr (float): Minimum learning rate, that the optimizer can drop to.
         num_epochs (int): Total number of training epochs.
         max_norm (float): Maximum norm for gradient clipping to prevent exploding gradients.
         print_freq (int): Frequency (in epochs) to print training statistics to console.
@@ -52,6 +59,10 @@ class ConfigTrainer:
 
     dataloaders: tuple[DataLoader, DataLoader, DataLoader]
     learning_rate: float
+    mode: str
+    factor: float
+    patience: int
+    min_lr: float
     num_epochs: int
     max_norm: float
     print_freq: int
@@ -67,6 +78,22 @@ class ConfigTrainer:
             raise TypeError(f"learning_rate must be an float, got {type(self.learning_rate).__name__}.")
         if self.learning_rate <= 0:
             raise ValueError(f"learning_rate must be positive, got {self.learning_rate}.")
+        
+        # - mode
+        if self.mode not in ['min', 'max']:
+            raise ValueError(f"mode must be 'min' or 'max', got {self.mode}")
+        
+        # - factor
+        if not isinstance(self.factor, float):
+            raise TypeError(f"factor must be a float.")
+        if not (0 < self.factor < 1):
+            raise ValueError(f"factor must be between 0 and 1.")
+        
+        # - patience
+        if not isinstance(self.patience, int):
+            raise TypeError(f"patience must be an integer.")
+        if self.patience < 0:
+            raise ValueError(f"patience must be non-negative.")
 
         # - num_epochs
         if not isinstance(self.num_epochs, int):
@@ -117,6 +144,7 @@ class ConfigTrainer:
 
 # Define custom type hints.
 History = tuple[NDArray, NDArray]
+Metrics = tuple[float, float, float, float]
 
 class Trainer():
     """
@@ -138,8 +166,8 @@ class Trainer():
         """
         Initializes the Trainer.
 
-        Sets up the optimizer (Adam), Loss Function (MSE), and history trackers.
-        If a checkpoint is provided in the config, it restores the model state,
+        Sets up the optimizer (Adam), Loss Function (MSE), Schuler (ReduceLROnPlateau), 
+        and history trackers. If a checkpoint is provided in the config, it restores the model state,
         optimizer state, and loss histories to resume training.
 
         Args:
@@ -161,18 +189,26 @@ class Trainer():
             lr = self.cfg.learning_rate
         )
 
+        self.scheduler = ReduceLROnPlateau(
+            optimizer = self.optimizer,
+            mode = self.cfg.mode,
+            factor = self.cfg.factor,
+            patience = self.cfg.patience,
+            min_lr = self.cfg.min_lr
+        )
+
         self.start_epoch: int = 0
 
         # Create trackers for the training and validation:
-        self.train_avg_loss_history: list[float] = []
-        self.train_rmse_loss_history: list[float] = [] # Root Mean Squared Error (RMSE).
-        self.train_r2_loss_history: list[float] = [] # Coefficient of Determination (R^2 Score).
-        self.train_mae_loss_history: list[float] = [] # Mean Absolute Error (MAE).
+        self.train_mse_history: list[float] = [] # Mean Squared Error (MSE).
+        self.train_rmse_history: list[float] = [] # Root Mean Squared Error (RMSE).
+        self.train_r2_history: list[float] = [] # Coefficient of Determination (R^2 Score).
+        self.train_mae_history: list[float] = [] # Mean Absolute Error (MAE).
 
-        self.val_avg_loss_history: list[float] = []
-        self.val_rmse_loss_history: list[float] = [] 
-        self.val_r2_loss_history: list[float] = [] 
-        self.val_mae_loss_history: list[float] = [] 
+        self.val_mse_history: list[float] = []
+        self.val_rmse_history: list[float] = [] 
+        self.val_r2_history: list[float] = [] 
+        self.val_mae_history: list[float] = [] 
 
         # If so, load a model.
         if self.cfg.saved_checkpoint:
@@ -181,9 +217,10 @@ class Trainer():
 
             self.model.load_state_dict(self.cfg.saved_checkpoint["model_state_dict"])
             self.optimizer.load_state_dict(self.cfg.saved_checkpoint["optimizer_state_dict"])
+            self.scheduler.load_state_dict(self.cfg.saved_checkpoint["scheduler_state_dict"])
 
-            self.train_rmse_loss_history, self.train_r2_loss_history, self.train_mae_loss_history = self.cfg.saved_checkpoint["train_histories"]
-            self.loss_history, self.val_rmse_loss_history, self.val_r2_loss_history, self.val_mae_loss_history = self.cfg.saved_checkpoint["val_histories"]
+            self.train_rmse_history, self.train_r2_history, self.train_mae_history = self.cfg.saved_checkpoint["train_histories"]
+            self.loss_history, self.val_rmse_history, self.val_r2_history, self.val_mae_history = self.cfg.saved_checkpoint["val_histories"]
 
     def _create_folder(
             self,
@@ -217,45 +254,46 @@ class Trainer():
 
             return None
 
-    def _calculate_losses(
+    def _calculate_metrics(
             self,
-            losses: list[float],
             targets: Tensor,
             logits: Tensor
-    ) -> tuple[float, float, float, float]:
+    ) -> Metrics:
         """
         Calculates regression performance metrics.
 
         Computes:
-        1. Average Loss (MSE) from the per-batch loss list.
+        1. MSE (Mean Squared Error).
         2. RMSE (Root Mean Squared Error).
         3. R^2 Score (Coefficient of Determination).
         4. MAE (Mean Absolute Error).
 
         Args:
-            losses (list[float]): List of scalar loss values from every batch in the epoch.
             targets (Tensor): Ground truth values (concatenated from all batches).
             logits (Tensor): Model predictions (concatenated from all batches).
 
         Returns:
-            tuple[float, float, float, float]: (Avg Loss, RMSE, R2, MAE).
+            Metric: (Avg Loss, RMSE, R2, MAE).
         """
 
-        # Calculate the average loss.
-        avg_loss: float = sum(losses) / len(losses)
+        # Calculate the mean squared error.
+        mse: float = mse_loss(
+            input = logits,
+            target = targets
+        )
         
         # Calculate the root mean squared error.
-        rmse_loss: float = np.sqrt(avg_loss)
+        rmse: float = np.sqrt(mse)
 
         # Calculate the coefficients of determination.
-        r2_loss: float = r2_score(targets, logits)
+        r2: float = r2_score(targets, logits)
 
         # Calculate the mean absolute error.
-        mae_loss: float = mean_absolute_error(targets, logits)
+        mae: float = mean_absolute_error(targets, logits)
 
-        return (avg_loss, rmse_loss, r2_loss, mae_loss)
+        return (mse, rmse, r2, mae)
 
-    def _train_one_epoch(self) -> tuple[float, float, float, float]:
+    def _train_one_epoch(self) -> Metrics:
         """
         Runs one complete training epoch.
 
@@ -263,8 +301,8 @@ class Trainer():
         and optimizer updates. Tracks metrics for the entire epoch.
 
         Returns:
-            tuple[float, float, float, float]: The aggregated training metrics 
-            (Avg Loss, RMSE, R2, MAE) for this epoch.
+            Metric: The aggregated training metrics 
+            (MSE, RMSE, R2, MAE) for this epoch.
         """
 
         # 1. Open the training mode.
@@ -303,15 +341,14 @@ class Trainer():
         train_targets_tensor: Tensor = torch.cat(train_targets)
         train_logits_tensor: Tensor = torch.cat(train_logits)
 
-        train_avg_loss, train_rmse_loss, train_r2_loss, train_mae_loss = self._calculate_losses(
-            losses = train_losses,
+        train_metrics = self._calculate_metrics(
             targets = train_targets_tensor,
             logits = train_logits_tensor
         )
 
-        return (train_avg_loss, train_rmse_loss, train_r2_loss, train_mae_loss)
+        return train_metrics
 
-    def _validate_one_epoch(self) -> tuple[float, float, float, float]:
+    def _validate_one_epoch(self) -> Metrics:
         """
         Runs one complete validation epoch.
 
@@ -319,8 +356,8 @@ class Trainer():
         Used to monitor model performance on unseen data without updating weights.
 
         Returns:
-            tuple[float, float, float, float]: The aggregated validation metrics 
-            (Avg Loss, RMSE, R2, MAE) for this epoch.
+            Metric: The aggregated validation metrics 
+            (MSE, RMSE, R2, MAE) for this epoch.
         """
 
         with torch.no_grad(): # Stops the tracking the history of operations.
@@ -341,19 +378,18 @@ class Trainer():
                 # Track the variables for this validation run.
                 val_logits.append(val_logit.detach())
                 val_targets.append(val_target)
-                val_losses.append(val_loss.item())
+                val_losses.append(val_loss.item())       
 
-            # 3. Calculate the loss values.
+            # 3. Calculate the metrics.
             val_targets_tensor: Tensor = torch.cat(val_targets)
             val_logits_tensor: Tensor = torch.cat(val_logits)
 
-            val_avg_loss, val_rmse_loss, val_r2_loss, val_mae_loss = self._calculate_losses(
-                losses = val_losses,
+            val_metrics = self._calculate_metrics(
                 targets = val_targets_tensor,
                 logits = val_logits_tensor
             )
 
-            return (val_avg_loss, val_rmse_loss, val_r2_loss, val_mae_loss)
+            return val_metrics
 
     def _save_checkpoint(
             self,
@@ -377,14 +413,15 @@ class Trainer():
         checkpoint_path: str = os.path.join(trial_folder_path, f"model_epoch_{current_epoch+1}.pth")
 
         # 2. Pack all the training and validation tracker lists into history tuples.
-        train_history: tuple[list[float], list[float], list[float], list[float]] = self.train_avg_loss_history, self.train_rmse_loss_history, self.train_r2_loss_history, self.train_mae_loss_history
-        val_history: tuple[list[float], list[float], list[float], list[float]] = self.val_avg_loss_history, self.val_rmse_loss_history, self.val_r2_loss_history, self.val_mae_loss_history
+        train_history: tuple[list[float], list[float], list[float], list[float]] = self.train_mse_history, self.train_rmse_history, self.train_r2_history, self.train_mae_history
+        val_history: tuple[list[float], list[float], list[float], list[float]] = self.val_mse_history, self.val_rmse_history, self.val_r2_history, self.val_mae_history
 
         # 3. Create the dictionary to hold all the states.
         checkpoint: dict[str, Any] = {
             "start_epoch": current_epoch,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
             "train_history": train_history,
             "val_history": val_history
         }
@@ -404,9 +441,12 @@ class Trainer():
 
         Returns:
             tuple: A tuple containing:
-                - train_history (tuple): Arrays of training metrics (Loss, RMSE, R2, MAE).
-                - val_history (tuple): Arrays of validation metrics (Loss, RMSE, R2, MAE).
+                - mse_history (tuple): (train_mse, val_mse) arrays.
+                - rmse_history (tuple): (train_rmse, val_rmse) arrays.
+                - r2_history (tuple): (train_r2, val_r2) arrays.
+                - mae_history (tuple): (train_mae, val_mae) arrays.
                 - train_time (tuple): Elapsed training time (Hours, Minutes, Seconds).
+                - trial_folder_path (str): The path where models/graphs are saved.
         """
 
         # 1. Start the training loop.
@@ -426,38 +466,41 @@ class Trainer():
             save_checkpoint_this_epoch: bool = ((epoch + 1) % self.cfg.save_checkpoint_freq == 0)
 
             # Train the model for one epoch.
-            train_avg_loss, train_rmse_loss, train_r2_loss, train_mae_loss = self._train_one_epoch()
+            train_mse, train_rmse, train_r2, train_mae = self._train_one_epoch()
 
             # If so, print the progress.
             if print_this_epoch:
                 print(f"\nEpoch: {epoch+1}/{self.cfg.num_epochs}")
-                print(f" Training Losses:")
-                print(f" -> Average: {train_avg_loss:.4f}")
-                print(f" -> RMSE: {train_rmse_loss:.4f}")
-                print(f" -> R^2: {train_r2_loss:.4f}")
-                print(f" -> MAE: {train_mae_loss:.4f}")
+                print(f" Training Metrics:")
+                print(f" -> MSE: {train_mse:.4f}")
+                print(f" -> RMSE: {train_rmse:.4f}")
+                print(f" -> R^2: {train_r2:.4f}")
+                print(f" -> MAE: {train_mae:.4f}")
 
             # Append the losses to the histories.
-            self.train_avg_loss_history.append(train_avg_loss)
-            self.train_rmse_loss_history.append(train_rmse_loss)
-            self.train_r2_loss_history.append(train_r2_loss)
-            self.train_mae_loss_history.append(train_mae_loss)
+            self.train_mse_history.append(train_mse)
+            self.train_rmse_history.append(train_rmse)
+            self.train_r2_history.append(train_r2)
+            self.train_mae_history.append(train_mae)
 
             # If so, validate.
             if validate_this_epoch:
-                val_avg_loss, val_rmse_loss, val_r2_loss, val_mae_loss = self._validate_one_epoch()
+                val_mse, val_rmse, val_r2, val_mae = self._validate_one_epoch()
 
-                print(f"\n Validation Losses:")
-                print(f" -> Average: {val_avg_loss:.4f}")
-                print(f" -> RMSE: {val_rmse_loss:.4f}")
-                print(f" -> R^2: {val_r2_loss:.4f}")
-                print(f" -> MAE: {val_mae_loss:.4f}")
+                # Update the scheduler.
+                self.scheduler.step(metrics=val_mse)
+
+                print(f"\n Validation Metrics:")
+                print(f" -> MSE: {val_mse:.4f}")
+                print(f" -> RMSE: {val_rmse:.4f}")
+                print(f" -> R^2: {val_r2:.4f}")
+                print(f" -> MAE: {val_mae:.4f}")
 
                 # Append the losses to the histories.
-                self.val_avg_loss_history.append(val_avg_loss)
-                self.val_rmse_loss_history.append(val_rmse_loss)
-                self.val_r2_loss_history.append(val_r2_loss)
-                self.val_mae_loss_history.append(val_mae_loss)
+                self.val_mse_history.append(val_mse)
+                self.val_rmse_history.append(val_rmse)
+                self.val_r2_history.append(val_r2)
+                self.val_mae_history.append(val_mae)
 
             # If so, save the checkpoint.
             if save_checkpoint_this_epoch:
@@ -486,25 +529,37 @@ class Trainer():
         print(f" Training Time: {int(train_hour):02d}:{int(train_min):02d}:{int(train_sec):02d}") # 0: Pad with zeros. & 2: Min width of charachters. & d: Input is a int. => (5 -> 05) and 12 stays.
 
         # 5. Convert all the lists into tuples.
-        train_avg_loss_history_np: NDArray = np.array(self.train_avg_loss_history)
-        train_rmse_loss_history_np: NDArray = np.array(self.train_rmse_loss_history)
-        train_r2_loss_history_np: NDArray = np.array(self.train_r2_loss_history)
-        train_mae_loss_history_np: NDArray = np.array(self.train_mae_loss_history)
+        train_mse_history_np: NDArray = np.array(self.train_mse_history)
+        train_rmse_history_np: NDArray = np.array(self.train_rmse_history)
+        train_r2_history_np: NDArray = np.array(self.train_r2_history)
+        train_mae_history_np: NDArray = np.array(self.train_mae_history)
 
-        val_avg_loss_history_np: NDArray = np.array(self.val_avg_loss_history)
-        val_rmse_loss_history_np: NDArray = np.array(self.val_rmse_loss_history)
-        val_r2_loss_history_np: NDArray = np.array(self.val_r2_loss_history)
-        val_mae_loss_history_np: NDArray = np.array(self.val_mae_loss_history)
+        val_mse_history_np: NDArray = np.array(self.val_mse_history)
+        val_rmse_history_np: NDArray = np.array(self.val_rmse_history)
+        val_r2_history_np: NDArray = np.array(self.val_r2_history)
+        val_mae_history_np: NDArray = np.array(self.val_mae_history)
 
         # Pack all the loss histories into tuples.
-        avg_loss_history: tuple[NDArray, NDArray] = (train_avg_loss_history_np, val_avg_loss_history_np)
-        rmse_loss_history: tuple[NDArray, NDArray] = (train_rmse_loss_history_np, val_rmse_loss_history_np)
-        r2_loss_history: tuple[NDArray, NDArray] = (train_r2_loss_history_np, val_r2_loss_history_np)
-        mae_loss_history: tuple[NDArray, NDArray] = (train_mae_loss_history_np, val_mae_loss_history_np)
+        mse_history: tuple[NDArray, NDArray] = (train_mse_history_np, val_mse_history_np)
+        rmse_history: tuple[NDArray, NDArray] = (train_rmse_history_np, val_rmse_history_np)
+        r2_history: tuple[NDArray, NDArray] = (train_r2_history_np, val_r2_history_np)
+        mae_history: tuple[NDArray, NDArray] = (train_mae_history_np, val_mae_history_np)
 
-        return (avg_loss_history, rmse_loss_history, r2_loss_history, mae_loss_history, train_time, trial_folder_path)
-    
-    def test(self) -> None:
+        return (mse_history, rmse_history, r2_history, mae_history, train_time, trial_folder_path)
+
+    def test(self) -> tuple[NDArray, NDArray]:
+        """
+        Evaluates the model on the Test Set.
+
+        Performs a forward pass on the test data, calculates global metrics,
+        and returns the raw predictions and targets for visualization.
+
+        Returns:
+            tuple[NDArray, NDArray]: A tuple containing:
+                - predictions: NumPy array of model predictions.
+                - targets: NumPy array of ground truth values.
+        """
+
         print("\n Starting with testing!")
 
         with torch.no_grad():
@@ -524,4 +579,23 @@ class Trainer():
                 test_logits.append(test_logit.detach())
                 test_targets.append(test_target)
 
-            # TODO Continue here...
+            # 4. Calculate the metrics.
+            test_targets_tensor: Tensor = torch.cat(test_targets)
+            test_logits_tensor: Tensor = torch.cat(test_logits)
+
+            (test_mse, test_rmse, test_r2, test_mae) = self._calculate_metrics(
+                targets = test_targets_tensor,
+                logits = test_logits_tensor
+            )
+
+            print(f"\n Test Metrics:")
+            print(f" -> MSE: {test_mse:.4f}")
+            print(f" -> RMSE: {test_rmse:.4f}")
+            print(f" -> R^2: {test_r2:.4f}")
+            print(f" -> MAE: {test_mae:.4f}")
+
+            # 5. Return the data and predictions as numpy arrays, to plot them.
+            concat_test_logits: NDArray = np.concatenate(test_logits)
+            concat_test_targets: NDArray = np.concatenate(test_targets)
+
+            return (concat_test_logits, concat_test_targets)
