@@ -20,10 +20,7 @@ from data_preprocess import (
     ConfigDataManager,
     DataManager,
 )
-from graph import (
-    ConfigHistoryPlotter,
-    HistoryPlotter
-)
+from graph import Plotter
 from lstm import (
     ConfigLSTM,
     LSTM
@@ -37,18 +34,18 @@ if __name__ == "__main__":
     # 1. Define the configuration and instance for data preprocessing.
     config_data_manager = ConfigDataManager(
         stride = 1,
-        mat_file_name = "B0005.mat",
-        battery_id = "B0005",
+        data_directory = "C:/Users/Besitzer/Desktop/Python/AI Projects/Long-Short Time Memory/Battery Health/naza",
+        train_battery_ids = ["B0005", "B0006"],
+        val_battery_ids = ["B0007"],
+        test_battery_ids = ["B0018"],
         interpolation_length = 500,
-        train_split = 0.65,
-        val_split = 0.20,
         batch_size = 32
     )
 
     data_manager = DataManager(config_data_manager=config_data_manager)
 
     # 2. Preprocess the data and return the dataloaders.
-    data_manager.prepare_data()
+    test_scaling_factors = data_manager.prepare_data()
 
     dataloaders: Tuple[DataLoader, DataLoader, DataLoader] = data_manager.get_loaders()
 
@@ -68,11 +65,15 @@ if __name__ == "__main__":
     config_trainer = ConfigTrainer(
         dataloaders = dataloaders,
         learning_rate = 1e-3,
+        mode = "min",
+        factor = 5e-1,
+        patience = 5,
+        min_lr = 1e-5,
         num_epochs = 10000,
         max_norm = 1.0,
-        print_freq = 500,
-        val_freq = 500,
-        save_checkpoint_freq = 500,
+        print_freq = 1000,
+        val_freq = 1000,
+        save_checkpoint_freq = 2000,
         model_save_path = "C:/Users/Besitzer/Desktop/Python/AI Projects/Long-Short Time Memory/Battery Health/Trials",
         saved_checkpoint = None,
         show_graph = True
@@ -84,22 +85,29 @@ if __name__ == "__main__":
     )
 
     # 5. Start the training.
-    avg_loss_history, rmse_loss_history, r2_loss_history, mae_loss_history, train_time, trial_folder_path = trainer.fit()
+    train_mse_history, train_rmse_history, train_r2_history, train_mae_history, train_time, trial_folder_path = trainer.fit()
 
     # Test the model after training.
-    # TODO
+    test_results = trainer.test()
 
-    # 6. Define the configuration and instance for the graphs.
-    config_history_plotter = ConfigHistoryPlotter(train_time = train_time)
-
-    history_plotter = HistoryPlotter(config_history_plotter=config_history_plotter)
+    # 6. Define the instance for the graphs.
+    plotter = Plotter()
 
     # 7. Plot the graphs.
-    history_plotter.plot_history(
-        histories = (avg_loss_history, rmse_loss_history, r2_loss_history, mae_loss_history),
-        plot_colors = ("red", "blue"),
-        plot_linestyles = ("--", "--"),
+    plotter.plot_training_results(
+        train_time = train_time,
+        histories = (train_mse_history, train_rmse_history, train_r2_history, train_mae_history),
+        colors = ("red", "blue"),
+        linestyles = ("--", "--"),
         trial_folder_path = trial_folder_path,
         show_graph = True
     )
 
+    plotter.plot_test_results(
+        scaling_factors = test_scaling_factors,
+        data = test_results,
+        colors = ("red", "blue"),
+        linestyles = ("-", "-"),
+        trial_folder_path = trial_folder_path,
+        show_graph = True
+    )
