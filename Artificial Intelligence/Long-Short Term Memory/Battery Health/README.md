@@ -47,15 +47,31 @@ The core of this project is a Many-to-One LSTM architecture.
 
 ## Current Results
 
-The model successfully learns the degradation pattern on the training data, achieving a near-perfect R² score. However, it exhibits a classic case of **overfitting**, where its performance on the unseen validation and test batteries is significantly lower.
+The model successfully learns the degradation pattern on the training data, but exhibits overfitting when evaluated on unseen test data.
 
-*   **Training R²:** ~0.99
-*   **Test R²:** ~0.48
-*   **Test RMSE:** ~0.126
+### Loss and Metric Histories
 
-This performance gap indicates that while the LSTM is powerful enough to memorize the patterns of the training batteries, it struggles to generalize to the unique degradation signatures of new batteries. The prediction plot shows the model correctly captures the downward trend but has a systematic bias, consistently over-predicting the capacity.
+The training loss consistently decreases, while the validation loss plateaus, indicating the model is memorizing the training data.
 
----
+![Loss History Plot](./images/loss_histories.png)
+
+### Test Set Predictions
+
+The plot below shows the model's predictions (red) against the true target values (blue) for the unseen test battery. The model captures the general downward trend but has a consistent optimistic bias.
+
+![Prediction vs Target Plot](./images/pred_vs_target_capacities.png)
+
+The model's performance clearly demonstrates a classic case of **overfitting**. While it learns the training data almost perfectly, its ability to generalize to new, unseen data is limited, as shown by the significant gap between the training and test metrics:
+
+*   **Training Performance (on seen data):**
+    *   **R² Score:** ~0.99 (Indicates a near-perfect fit to the training data.)
+    *   **RMSE:** ~0.028 (A very low error, showing predictions are extremely close to the true values.)
+
+*   **Test Performance (on unseen data):**
+    *   **R² Score:** ~0.48 (Explains about half the variance; has moderate predictive power.)
+    *   **RMSE:** ~0.126 (The prediction error is more than 4 times higher than on the training data.)
+
+This gap indicates that while the LSTM is powerful enough to memorize the patterns of the training batteries, it struggles to apply that knowledge to the unique degradation signatures of new batteries.
 
 ## Future Work: Improving Generalization with Feature Engineering
 
@@ -63,7 +79,7 @@ The current model's primary limitation is its difficulty in generalizing from ra
 
 ### Learning from the Kaggle Notebook's Approach
 
-A highly successful public Kaggle notebook on this dataset achieves an R² score of **~0.98** on the test set. It does this not with a complex model, but by solving a much simpler, cleverly framed problem.
+A highly successful public Kaggle notebook (https://www.kaggle.com/code/rajeevsharma993/battery-health-nasa-dataset) on this dataset achieves an R² score of **~0.98** on the test set. It does this not with a complex model, but by solving a much simpler, cleverly framed problem.
 
 Instead of feeding raw sensor curves to a model, the notebook **engineers a few powerful features** and uses a simpler Random Forest model. Here’s exactly what it does:
 
@@ -78,19 +94,3 @@ Instead of feeding raw sensor curves to a model, the notebook **engineers a few 
 4.  **It Uses Lag Features (Historical SOH):** To make a prediction for the current cycle, it uses the SOH from the *previous one or two cycles*. This transforms the problem from "predict from physics" to "predict the next step in a sequence." The model is asked: "Knowing the health was 95% yesterday and 94.5% the day before, what is it today?" This is a much easier question to answer.
 
 5.  **It Uses Logarithmic Transformation:** The notebook applies a `log()` function to the `Cycle` number and `SOH` values. This mathematically transforms the curved degradation trend into a nearly straight line, making the pattern trivial for a simple model to learn.
-
-### How to Implement This in Your Project
-
-You can dramatically improve your model by adopting a hybrid approach:
-
-1.  **Engineer New Features:** In `data_preprocess.py`, create new features for each cycle:
-    *   `SOH`
-    *   `Cycle_Number`
-    *   Lag features like `SOH_previous_cycle`
-
-2.  **Create a Hybrid Model:** Your LSTM is excellent at learning from sequences. Don't discard it—use it as a powerful feature extractor.
-    *   **Step A (LSTM Feature Extractor):** Keep your LSTM, but have it process the raw curves and output a small, dense vector (e.g., of size 8 or 16). This vector becomes a learned "health summary" of the raw physical signals for that cycle.
-    *   **Step B (Combine Features):** Concatenate the LSTM's output vector with the handcrafted features (`Cycle_Number`, `SOH_previous_cycle`, etc.).
-    *   **Step C (Final Prediction):** Add a small feed-forward network (a few Dense layers) after the concatenation step to make the final SOH prediction from this rich, combined feature set.
-
-By combining the deep learning power of your LSTM to interpret raw data with the focused, problem-simplifying power of handcrafted features, you can build a far more accurate and robust model.
