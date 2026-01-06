@@ -34,7 +34,7 @@ if __name__ == "__main__":
     # 1. Define the configuration and instance for data preprocessing.
     config_data_manager = ConfigDataManager(
         stride = 1,
-        data_directory = "C:/Users/Besitzer/Desktop/Python/AI Projects/Long-Short Time Memory/Battery Health/naza",
+        data_directory = "CHANGE THIS PART",
         train_battery_ids = ["B0005", "B0006"],
         val_battery_ids = ["B0007"],
         test_battery_ids = ["B0018"],
@@ -74,7 +74,7 @@ if __name__ == "__main__":
         print_freq = 1000,
         val_freq = 1000,
         save_checkpoint_freq = 2000,
-        model_save_path = "C:/Users/Besitzer/Desktop/Python/AI Projects/Long-Short Time Memory/Battery Health/Trials",
+        model_save_path = "CHANGE THIS PART",
         saved_checkpoint = None,
         show_graph = True
     )
@@ -111,3 +111,4 @@ if __name__ == "__main__":
         trial_folder_path = trial_folder_path,
         show_graph = True
     )
+
