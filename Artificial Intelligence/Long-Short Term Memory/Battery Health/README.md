@@ -6,7 +6,7 @@ The primary goal is to predict the battery's capacity degradation over its lifec
 
 ## Dataset
 
-This model uses the [NASA Prognostics Center of Excellence (PCoE) Battery Data Set](https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/). The dataset contains measurements from various Li-ion batteries run under different operational profiles (charge, discharge, impedance) until they reached their end-of-life (EOL), defined as a 30% fade in rated capacity.
+This model uses the [NASA Prognostics Battery Dataset](https://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/). The dataset contains measurements from various Li-ion batteries run under different operational profiles (charge, discharge, impedance) until they reached their end-of-life (EOL), defined as a 30% fade in rated capacity.
 
 Our model focuses on the `discharge` cycles, using the following time-series data as input:
 *   Voltage Measured
@@ -79,7 +79,7 @@ The current model's primary limitation is its difficulty in generalizing from ra
 
 ### Learning from the Kaggle Notebook's Approach
 
-A highly successful public Kaggle notebook (https://www.kaggle.com/code/rajeevsharma993/battery-health-nasa-dataset) on this dataset achieves an R² score of **~0.98** on the test set. It does this not with a complex model, but by solving a much simpler, cleverly framed problem.
+A highly successful public [Kaggle Notebook](https://www.kaggle.com/code/rajeevsharma993/battery-health-nasa-dataset) on this dataset achieves an R² score of **~0.98** on the test set. It does this not with a complex model, but by solving a much simpler, cleverly framed problem.
 
 Instead of feeding raw sensor curves to a model, the notebook **engineers a few powerful features** and uses a simpler Random Forest model. Here’s exactly what it does:
 
