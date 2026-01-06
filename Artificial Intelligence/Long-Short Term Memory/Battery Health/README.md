@@ -35,18 +35,6 @@ The core of this project is a Many-to-One LSTM architecture.
     *   The model consists of an LSTM layer followed by a Dropout layer for regularization and a final Dense (Linear) layer to output the predicted capacity.
     *   It processes the entire sequence of 500 time steps and uses the final hidden state for prediction.
 
-## Installation
-
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/your-username/your-repo-name.git
-    cd your-repo-name
-    ```
-2.  Install the required dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-
 ## Usage
 
 1.  Download the NASA battery dataset and place the `.mat` files in the `data/` directory.
