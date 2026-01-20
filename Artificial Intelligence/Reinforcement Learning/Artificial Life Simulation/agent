@@ -1,0 +1,262 @@
+# agent.py
+
+#! Custom TODO notes:
+#TODO AD: Add docstring.
+#TODO ATH: Add type hint.
+#TODO CTH: Check type hint.
+#TODO FTH: Fix the hardcoding.
+#TODO HPE: Handle possible error.
+#TODO AC: Add comment.
+#TODO AIC: Add input control.
+#TODO ACV: Add constant variable.
+
+#! PW: Possibly wrong.
+
+from dataclasses import dataclass
+from numpy.typing import NDArray
+
+move_direction = tuple[int, int]
+
+@dataclass(frozen=True)
+class ConfigAgent:
+    # Class Constants.
+    METABOLISM_INFECTED_MULT: float = 1.25
+    METABOLISM_BLEEDING_MULT: float = 1.25
+    METABOLISM_SLEEPING_MULT: float = 0.2
+    METABOLISM_PREGNANCY_MULT: float = 1.5
+    METABOLISM_HIBERNATING_MULT: float = 0.05
+    METABOLISM_TEMP_HARSHNESS: float = 0.1
+
+    BIRTH_ENERGY_FACTOR: float = 0.5
+
+    DISEASE_HEALTH_COST: int = 5 #TODO Add different types of diseases.
+    DISEASE_ENERGY_COST: int = 10
+
+    BLEEDING_HEALTH_COST: int = 10
+    BLEEDING_ENERGY_COST: int = 5
+
+    MOVE_ENERGY_COST: int = 5
+    MOVEMENT_DIRECTIONS: tuple[move_direction, move_direction, move_direction, move_direction]
+
+    EMPTY_MATRIX_ID: int = 0
+    AGENT_MATRIX_ID: int = 1
+
+    GESTATION_TIME: int = 250
+
+    # Identity Genetics.
+    clan_id: int
+    sex: int # (0, 1, 2).
+
+    # Physical Genetics.
+    size: int #(1, 2, 3).
+    max_age: int
+    max_health: int
+    max_energy: int
+    energy_burn_rate: float
+    optimal_temperature: int
+    resistance: float
+
+    # Survival Genetics.
+    chronotype: float
+    has_venom: bool
+    has_mimicry: bool
+    plant_digestion_efficiency: float
+    meat_digestion_efficiency: float
+    
+    # Behavioral Genetics.
+    kinship_loyalty: float
+    parental_instinct: float
+    hostility: float
+    fight_flight_bias: float
+
+    def __post_init__(self) -> None:
+        pass
+
+class Agent:
+    def __init__(
+            self,
+            config_agent: ConfigAgent,
+            position: tuple[int, int]
+    ) -> None:
+        # Define input parameters.
+        self.config_agent: ConfigAgent = config_agent
+
+        # Spatial States.
+        self.x, self.y = position
+
+        # Vital States.
+        self.age: int = 0
+        self.health: float = self.config_agent.max_health
+        self.energy: float = self.config_agent.max_energy * self.config_agent.BIRTH_ENERGY_FACTOR
+
+        # Metabolic States.
+        self.is_infected: bool = False
+        self.is_bleeding: bool = False
+        self.is_sleeping: bool = False
+        self.is_pregnant: bool = False
+        self.is_hibernating: bool = False
+
+        # Timers & Counters.
+        self.hibernation_timer: int = 0
+        self.gestation_timer: int = 0
+        self.waste_accumulated: int = 0
+
+    def _calculate_senescence(self) -> float:
+
+        # Calculates the age threshold for the scenescence to affect.
+        threshold: int = self.config_agent.max_age // 2
+
+        if self.age > threshold:
+            multiplier: float = 1.0 - ((self.age - threshold) / (self.config_agent.max_age - threshold)) ** 2
+
+            return max(multiplier, 0.1)
+    
+        return 1.0 # If not, no senescene effect is seen, so the attributes stay the same.
+
+    def _process_metabolism(
+            self,
+            temperature: int,
+            effective_resistance: float
+    ) -> None:
+        cfg: ConfigAgent = self.config_agent
+
+        # 1. Calculates the state modifier.
+        state_modifier: float = 1.0 # Base burn rate.
+
+        # Applies the extra states to the base burn rate.
+        if self.is_infected:
+            state_modifier *= cfg.METABOLISM_INFECTED_MULT
+        if self.is_bleeding:
+            state_modifier *= cfg.METABOLISM_BLEEDING_MULT
+        if self.is_sleeping:
+            state_modifier *= cfg.METABOLISM_SLEEPING_MULT
+        if self.is_pregnant:
+            state_modifier *= cfg.METABOLISM_PREGNANCY_MULT
+        if self.is_hibernating:
+            state_modifier *=  cfg.METABOLISM_HIBERNATING_MULT
+
+        # 2. Calculates the termal state modifier.
+        temp_diff: int = abs(temperature - cfg.optimal_temperature)
+
+        thermal_state_modifier: float = ((temp_diff * cfg.METABOLISM_TEMP_HARSHNESS) * (1.0 - effective_resistance))
+
+        # 3. Calculates the total burn rate depending on base burn rate, size, state and temperature.
+        total_burn_rate: float = (cfg.energy_burn_rate * cfg.size * state_modifier) + thermal_state_modifier
+        
+        self.energy -= total_burn_rate
+
+    def _handle_disease(
+            self,
+            effective_resistance: float
+    ) -> None:
+        # 1. Calculates health and energy costs.
+        health_cost: float = self.config_agent.DISEASE_HEALTH_COST * (1.0 - effective_resistance)
+        energy_cost: float = self.config_agent.DISEASE_ENERGY_COST * (1.0 - effective_resistance)
+
+        # 2. Deducts the costs.
+        self.health -= health_cost
+        self.energy -= energy_cost
+
+        # 3. Handles the transmission logic.
+        pass
+
+    def _handle_bleeding(
+            self,
+            effective_resistance: float
+    ) -> None:
+        # 1. Calculates health and energy costs.
+        health_cost: float = self.config_agent.BLEEDING_HEALTH_COST * (1.0 - effective_resistance)
+        energy_cost: float = self.config_agent.BLEEDING_ENERGY_COST * (1.0 - effective_resistance)
+
+        # 2. Deducts the costs.
+        self.health -= health_cost
+        self.energy -= energy_cost
+        
+    def _give_birth(self) -> None:
+        pass #TODO Give birth.
+
+    def _handle_waste(self) -> None:
+        pass #TODO Handles waste based on eaten food.
+
+    def _move(
+            self,
+            direction_index: int, # (0 = Up, 1 = Right, 2 = Down, 3 = Left).
+            simulation_size: int,
+            agent_matrix: NDArray
+    ) -> tuple[bool, NDArray | None]:
+        # 1. Calculates the target based on the direction.
+        x, y = self.x, self.y
+
+        dx, dy = self.config_agent.MOVEMENT_DIRECTIONS[direction_index]
+
+        # 2. Checks out of bound.
+        new_x, new_y = x + dx, y + dy
+        
+        if not(0 <= new_x < simulation_size) or not(0 <= new_y < simulation_size):
+            return (False, None)
+
+        # 3. Checks collision. 
+        if agent_matrix[new_y, new_x]:
+            #TODO Implement the agent trampling logic here.
+            return (False, None)
+        
+        # 4. Deletes the old position and updates the new position.
+        agent_matrix[y, x] = self.config_agent.EMPTY_MATRIX_ID
+
+        agent_matrix[new_y, new_x] = self.config_agent.AGENT_MATRIX_ID
+        self.x, self.y = new_x, new_y
+        
+        # 5. Deducts energy.
+        self.energy -= self.config_agent.MOVE_ENERGY_COST
+
+        # 6. Return the validation of move for Reinforcement Learning and the new matrix to update in visualization.
+        return (True, agent_matrix) 
+    
+    def _eat(
+            self,
+            resource_matrix: NDArray
+    ) -> tuple[bool, NDArray | None]:
+        pass
+    
+    def agent_loop(
+            self,
+            temperature: int
+    ) -> None:
+        # A. METABOLISM ACTIONS.
+        # 1. Check whether the agent dies.
+        if (self.energy < 0) or (self.health < 0):
+            pass #TODO DIE (deletes from the dictionary).
+
+        # 2. Updates the agents age.
+        self.age += 1
+
+        # 3. Calculates the senescence multiplier and upon that effective resistance.
+        senescence_multiplier: float = self._calculate_senescence()
+
+        effective_resistance: float = self.config_agent.resistance * senescence_multiplier
+        
+        # 4. Processes the metabolism.
+        self._process_metabolism(
+            temperature = temperature,
+            effective_resistance = effective_resistance
+        )
+
+        # 5. Handles the disease state.
+        if self.is_infected:
+            self._handle_disease(effective_resistance = effective_resistance)
+
+        # 6. Handles the bleeding state.
+        if self.is_bleeding:
+            self._handle_bleeding(effective_resistance = effective_resistance)
+
+        # 7. Updates the gestation.
+        if self.is_pregnant:
+            self.gestation_timer += 1
+
+            if self.gestation_timer == self.config_agent.GESTATION_TIME:
+                self._give_birth()
+        
+        # 8. Handles the waste.
+        self._handle_waste()
+
+        # B. PHYSICAL ACTIONS.
