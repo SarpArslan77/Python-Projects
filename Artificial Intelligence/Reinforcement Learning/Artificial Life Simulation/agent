@@ -12,37 +12,18 @@
 
 #! PW: Possibly wrong.
 
+import numpy as np
+import polars as pl
+from polars import DataFrame
+
 from dataclasses import dataclass
 from numpy.typing import NDArray
 
+# Custom type hints.
 move_direction = tuple[int, int]
 
 @dataclass(frozen=True)
 class ConfigAgent:
-    # Class Constants.
-    METABOLISM_INFECTED_MULT: float = 1.25
-    METABOLISM_BLEEDING_MULT: float = 1.25
-    METABOLISM_SLEEPING_MULT: float = 0.2
-    METABOLISM_PREGNANCY_MULT: float = 1.5
-    METABOLISM_HIBERNATING_MULT: float = 0.05
-    METABOLISM_TEMP_HARSHNESS: float = 0.1
-
-    BIRTH_ENERGY_FACTOR: float = 0.5
-
-    DISEASE_HEALTH_COST: int = 5 #TODO Add different types of diseases.
-    DISEASE_ENERGY_COST: int = 10
-
-    BLEEDING_HEALTH_COST: int = 10
-    BLEEDING_ENERGY_COST: int = 5
-
-    MOVE_ENERGY_COST: int = 5
-    MOVEMENT_DIRECTIONS: tuple[move_direction, move_direction, move_direction, move_direction]
-
-    EMPTY_MATRIX_ID: int = 0
-    AGENT_MATRIX_ID: int = 1
-
-    GESTATION_TIME: int = 250
-
     # Identity Genetics.
     clan_id: int
     sex: int # (0, 1, 2).
@@ -69,6 +50,30 @@ class ConfigAgent:
     hostility: float
     fight_flight_bias: float
 
+    # Class Constants.
+    METABOLISM_INFECTED_MULT: float = 1.25
+    METABOLISM_BLEEDING_MULT: float = 1.25
+    METABOLISM_SLEEPING_MULT: float = 0.2
+    METABOLISM_PREGNANCY_MULT: float = 1.5
+    METABOLISM_HIBERNATING_MULT: float = 0.05
+    METABOLISM_TEMP_HARSHNESS: float = 0.1
+
+    BIRTH_ENERGY_FACTOR: float = 0.5
+
+    DISEASE_HEALTH_COST: int = 5 #TODO Add different types of diseases.
+    DISEASE_ENERGY_COST: int = 10
+
+    BLEEDING_HEALTH_COST: int = 10
+    BLEEDING_ENERGY_COST: int = 5
+
+    MOVE_ENERGY_COST: int = 5
+    MOVEMENT_DIRECTIONS: tuple[move_direction, move_direction, move_direction, move_direction]
+
+    EMPTY_MATRIX_ID: int = 0
+    AGENT_MATRIX_ID: int = 1
+
+    GESTATION_TIME: int = 250
+
     def __post_init__(self) -> None:
         pass
 
@@ -76,30 +81,9 @@ class Agent:
     def __init__(
             self,
             config_agent: ConfigAgent,
-            position: tuple[int, int]
     ) -> None:
         # Define input parameters.
         self.config_agent: ConfigAgent = config_agent
-
-        # Spatial States.
-        self.x, self.y = position
-
-        # Vital States.
-        self.age: int = 0
-        self.health: float = self.config_agent.max_health
-        self.energy: float = self.config_agent.max_energy * self.config_agent.BIRTH_ENERGY_FACTOR
-
-        # Metabolic States.
-        self.is_infected: bool = False
-        self.is_bleeding: bool = False
-        self.is_sleeping: bool = False
-        self.is_pregnant: bool = False
-        self.is_hibernating: bool = False
-
-        # Timers & Counters.
-        self.hibernation_timer: int = 0
-        self.gestation_timer: int = 0
-        self.waste_accumulated: int = 0
 
     def _calculate_senescence(self) -> float:
 
@@ -182,8 +166,9 @@ class Agent:
             self,
             direction_index: int, # (0 = Up, 1 = Right, 2 = Down, 3 = Left).
             simulation_size: int,
-            agent_matrix: NDArray
-    ) -> tuple[bool, NDArray | None]:
+            agent_matrix: NDArray,
+            agent_color_matrix: NDArray
+    ) -> tuple[bool, NDArray|None, NDArray|None]:
         # 1. Calculates the target based on the direction.
         x, y = self.x, self.y
 
@@ -202,8 +187,10 @@ class Agent:
         
         # 4. Deletes the old position and updates the new position.
         agent_matrix[y, x] = self.config_agent.EMPTY_MATRIX_ID
+        agent_color_matrix[y, x] = self.config_agent.EMPTY_MATRIX_ID
 
         agent_matrix[new_y, new_x] = self.config_agent.AGENT_MATRIX_ID
+        agent_color_matrix[new_y, new_x] = self.color
         self.x, self.y = new_x, new_y
         
         # 5. Deducts energy.
@@ -260,3 +247,220 @@ class Agent:
         self._handle_waste()
 
         # B. PHYSICAL ACTIONS.
+
+@dataclass(frozen=True)
+class ConfigAgentManager:
+    
+    # Physical Genetics.
+    MIN_SIZE: int = 1
+    MAX_SIZE: int = 3
+    MIN_AGE: int = 50
+    MAX_AGE: int = 250
+    MIN_HEALTH: int = 50
+    MAX_HEALTH: int = 250
+    MIN_ENERGY: int = 50
+    MAX_ENERGY: int = 250
+    MIN_TEMP: int = 0
+    MAX_TEMP: int = 50
+    MIN_ENERGY_BURN: float = 0.1
+    MAX_ENERGY_BURN: float = 1.0
+    MIN_RESISTANCE: float = 0.1
+    MAX_RESISTANCE: float = 1.0
+    
+    # Survival Genetics.
+    MIN_CHRONOTYPE: float = 0.1
+    MAX_CHRONOTYPE: float = 1.0
+    MIN_PLANT_DIGEST: float = 0.1
+    MAX_PLANT_DIGEST: float = 1.0
+    MIN_MEAT_DIGEST: float = 0.1
+    MAX_MEAT_DIGEST: float = 1.0
+    VENOM_CHANCE: float = 0.1
+    MIMICRY_CHANCE: float = 0.1
+
+    # Behavioral Genetics.
+    MIN_KINSHIP: float = 0.1
+    MAX_KINSHIP: float = 1.0
+    MIN_PARENTAL: float = 0.1
+    MAX_PARENTAL: float = 1.0
+    MIN_HOSTILITY: float = 0.1
+    MAX_HOSTILITY: float = 1.0
+    MIN_FIGHT_FLIGHT: float = 0.1
+    MAX_FIGHT_FLIGHT: float = 1.0
+
+    BIRTH_ENERGY_FACTOR: float = 0.5
+    AGENT_MATRIX_ID: int = 1
+
+    def __post_init__(self) -> None:
+        pass
+
+class AgentManager:
+
+    def __init__(
+            self,
+            config_agent_manager: ConfigAgentManager,
+            config_agent: ConfigAgent,
+            simulation_size: int
+    ) -> None:
+        # 1. Defines input parameters.
+        self.config_agent_manager: ConfigAgentManager = config_agent_manager
+        self.config_agent: ConfigAgent = config_agent
+        self.simulation_size: int = simulation_size
+
+        # 2. Creates agent matrices.
+        self.agent_matrix: NDArray = np.zeros(
+            shape = (self.simulation_size, self.simulation_size),
+            dtype = np.uint8
+        )
+
+        self.agent_color_matrix: NDArray = np.zeros(
+            shape = (self.simulation_size, self.simulation_size),
+            dtype = np.uint8
+        )
+
+        # 3. Creates a agent DataFrame.
+        self.agents_df: DataFrame = self._create_empty_agent_df()
+
+    def _create_empty_agent_df(self) -> DataFrame:   
+        base_agent_df: DataFrame = {
+            # Identity Genetics.
+            "sex": pl.UInt8, 
+            "clan_id": pl.UInt8,
+
+            # Physical Genetics.
+            "size": pl.UInt8,
+            "max_age": pl.UInt8,
+            "max_health": pl.UInt8,
+            "max_energy": pl.UInt8,
+            "temperature": pl.UInt8,
+            "energy_burn_rate": pl.Float16,
+            "resistance": pl.Float16,
+
+            # Survival Genetics.
+            "chronotype": pl.Float16,
+            "plant_digestion_efficiency": pl.Float16,
+            "meat_digestion_efficiency": pl.Float16,
+            "has_venom": pl.Boolean, 
+            "has_mimicry": pl.Boolean,
+
+            # Behavioral Genetics.
+            "kinship_loyalty": pl.Float16,
+            "parental_instinct": pl.Float16,
+            "hostility": pl.Float16,
+            "fight_flight_bias":pl.Float16,
+
+            # Metabolic States.
+            "age":pl.UInt8,
+            "is_infected": pl.Boolean,
+            "is_bleeding": pl.Boolean,
+            "is_sleeping": pl.Boolean,
+            "is_pregnant": pl.Boolean,
+            "is_hibernating": pl.Boolean,
+
+            # Timers & Counters.
+            "hibernation_timer":pl.UInt8,
+            "gestation_timer": pl.UInt8,
+            "waste_accumulated": pl.UInt8
+        }
+
+        return base_agent_df
+
+    def create_agents(
+            self,
+            count: int
+    ) -> None:
+        # 1. Creates a random number generator instance.
+        rng = np.random.default_rng()
+
+        # 2. Generates all random data in a single dictionary definition.
+        agent_data: dict[str, NDArray] = {
+            # Identity Genetics.
+            "sex": rng.integers(low=0, high=2 + 1, size=count), #TODO ACV
+            "clan_id": rng.integers(low=0, high=0 + 1, size=count), #TODO Add Clan ID mechanism.
+
+            # Physical Genetics.
+            "size": rng.integers(low=self.config_agent_manager.MIN_SIZE, high=self.config_agent_manager.MAX_SIZE + 1, size=count),
+            "max_age": rng.integers(low=self.config_agent_manager.MIN_AGE, high=self.config_agent_manager.MAX_AGE + 1, size=count),
+            "max_health": rng.integers(low=self.config_agent_manager.MIN_HEALTH, high=self.config_agent_manager.MAX_HEALTH + 1, size=count),
+            "max_energy": rng.integers(low=self.config_agent_manager.MIN_ENERGY, high=self.config_agent_manager.MAX_ENERGY + 1, size=count),
+            "temperature": rng.integers(low=self.config_agent_manager.MIN_TEMP, high=self.config_agent_manager.MAX_TEMP + 1, size=count),
+            "energy_burn_rate": rng.uniform(low=self.config_agent_manager.MIN_ENERGY_BURN, high=self.config_agent_manager.MAX_ENERGY_BURN + 1, size=count),
+            "resistance": rng.uniform(low=self.config_agent_manager.MIN_RESISTANCE, high=self.config_agent_manager.MAX_RESISTANCE + 1, size=count),
+
+            # Survival Genetics.
+            "chronotype": rng.uniform(low=self.config_agent_manager.MIN_CHRONOTYPE, high=self.config_agent_manager.MAX_CHRONOTYPE + 1, size=count),
+            "plant_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_PLANT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST + 1, size=count),
+            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST + 1, size=count),
+            "has_venom": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.VENOM_CHANCE, # Creates a boolean array according to the condition.
+            "has_mimicry": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.MIMICRY_CHANCE,
+
+            # Behavioral Genetics.
+            "kinship_loyalty": rng.uniform(low=self.config_agent_manager.MIN_KINSHIP, high=self.config_agent_manager.MAX_KINSHIP + 1, size=count),
+            "parental_instinct": rng.uniform(low=self.config_agent_manager.MIN_PARENTAL, high=self.config_agent_manager.MAX_PARENTAL + 1, size=count),
+            "hostility": rng.uniform(low=self.config_agent_manager.MIN_HOSTILITY, high=self.config_agent_manager.MAX_HOSTILITY + 1, size=count),
+            "fight_flight_bias": rng.uniform(low=self.config_agent_manager.MIN_FIGHT_FLIGHT, high=self.config_agent_manager.MAX_FIGHT_FLIGHT + 1, size=count),
+
+            # Metabolic States.
+            "age": np.zeros(shape=count, dtype=np.uint8),
+            "is_infected": np.full(shape=count, fill_value=False, dtype=bool),
+            "is_bleeding": np.full(shape=count, fill_value=False, dtype=bool),
+            "is_sleeping": np.full(shape=count, fill_value=False, dtype=bool),
+            "is_pregnant": np.full(shape=count, fill_value=False, dtype=bool),
+            "is_hibernating": np.full(shape=count, fill_value=False, dtype=bool),
+
+            # Timers & Counters.
+            "hibernation_timer": np.zeros(shape=count, dtype=np.uint16),
+            "gestation_timer": np.zeros(shape=count, dtype=np.uint16),
+            "waste_accumulated": np.zeros(shape=count, dtype=np.uint16)
+        }
+
+        # 3. Creates the DataFrame.
+        new_agents_df = DataFrame(data=agent_data)
+
+        # 4. Creates columns for the attributes, that have starting values.
+        new_agents_df = new_agents_df.with_columns(
+            pl.col("max_health").alias("health"), # Gets the reference to the column.
+            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).alias("energy")  # Name of the added attribute.
+        )
+
+        # 5. Adds derived color columns.
+        new_agents_df = new_agents_df.with_columns(
+            (pl.col("meat_digestion_efficiency") * 255).cast(pl.UInt8).alias("color_r"),
+            (pl.col("plant_digestion_efficiency") * 255).cast(pl.UInt8).alias("color_g"),
+            (pl.col("size") * 85).cast(pl.UInt8).alias("color_b") # (Size 1, 2, 3 -> 85, 170, 255).
+        )
+
+        # 6. Handles the placement in the agent matrix.
+        # Finds the flat indices of zero elements.
+        zero_indices_flat: NDArray = np.flatnonzero(a=(self.agent_matrix == 0))
+
+        # Checks whether there are enough available spots.
+        if count > len(zero_indices_flat):
+            raise ValueError(
+                f"Can't create {count} agents. Only {len(zero_indices_flat)} empty spots are available!"
+            )
+
+        # Randomly chooses from these indices.
+        random_indices_flat: NDArray = np.random.choice(
+            a = zero_indices_flat,
+            size = count,
+            replace = False
+        )
+
+        # Updates the agent matrix at the choosen spots.
+        np.put(
+            a = self.agent_matrix,
+            ind = random_indices_flat,
+            v = self.config_agent_manager.AGENT_MATRIX_ID
+        )
+
+        # Add position columns to the DataFrame.
+        new_agents_df = new_agents_df.with_columns(
+            (random_indices_flat % self.simulation_size).alias("x_pos"), # No need for 'lit' when the source is already an array.
+            (random_indices_flat // self.simulation_size).alias("y_pos")
+        )
+
+        # 7. Updates the agent DataFrame.
+        self.agents_df = pl.concat([self.agents_df, new_agents_df])
+        
+    def update_agents(self) -> None:
+        pass
