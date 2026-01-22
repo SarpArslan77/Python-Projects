@@ -9,6 +9,7 @@
 #TODO AC: Add comment.
 #TODO AIC: Add input control.
 #TODO ACV: Add constant variable.
+#TODO WOO: Work on organising.
 
 #! PW: Possibly wrong.
 
@@ -50,30 +51,6 @@ class ConfigAgent:
     hostility: float
     fight_flight_bias: float
 
-    # Class Constants.
-    METABOLISM_INFECTED_MULT: float = 1.25
-    METABOLISM_BLEEDING_MULT: float = 1.25
-    METABOLISM_SLEEPING_MULT: float = 0.2
-    METABOLISM_PREGNANCY_MULT: float = 1.5
-    METABOLISM_HIBERNATING_MULT: float = 0.05
-    METABOLISM_TEMP_HARSHNESS: float = 0.1
-
-    BIRTH_ENERGY_FACTOR: float = 0.5
-
-    DISEASE_HEALTH_COST: int = 5 #TODO Add different types of diseases.
-    DISEASE_ENERGY_COST: int = 10
-
-    BLEEDING_HEALTH_COST: int = 10
-    BLEEDING_ENERGY_COST: int = 5
-
-    MOVE_ENERGY_COST: int = 5
-    MOVEMENT_DIRECTIONS: tuple[move_direction, move_direction, move_direction, move_direction]
-
-    EMPTY_MATRIX_ID: int = 0
-    AGENT_MATRIX_ID: int = 1
-
-    GESTATION_TIME: int = 250
-
     def __post_init__(self) -> None:
         pass
 
@@ -105,27 +82,27 @@ class Agent:
         cfg: ConfigAgent = self.config_agent
 
         # 1. Calculates the state modifier.
-        state_modifier: float = 1.0 # Base burn rate.
+        metabolism_modifier: float = 1.0 # Base burn rate.
 
         # Applies the extra states to the base burn rate.
         if self.is_infected:
-            state_modifier *= cfg.METABOLISM_INFECTED_MULT
+            metabolism_modifier *= cfg.METABOLISM_INFECTED_MULT
         if self.is_bleeding:
-            state_modifier *= cfg.METABOLISM_BLEEDING_MULT
+            metabolism_modifier *= cfg.METABOLISM_BLEEDING_MULT
         if self.is_sleeping:
-            state_modifier *= cfg.METABOLISM_SLEEPING_MULT
+            metabolism_modifier *= cfg.METABOLISM_SLEEPING_MULT
         if self.is_pregnant:
-            state_modifier *= cfg.METABOLISM_PREGNANCY_MULT
+            metabolism_modifier *= cfg.METABOLISM_PREGNANCY_MULT
         if self.is_hibernating:
-            state_modifier *=  cfg.METABOLISM_HIBERNATING_MULT
+            metabolism_modifier *=  cfg.METABOLISM_HIBERNATING_MULT
 
         # 2. Calculates the termal state modifier.
         temp_diff: int = abs(temperature - cfg.optimal_temperature)
 
-        thermal_state_modifier: float = ((temp_diff * cfg.METABOLISM_TEMP_HARSHNESS) * (1.0 - effective_resistance))
+        thermal_metabolism_modifier: float = ((temp_diff * cfg.METABOLISM_TEMP_HARSHNESS) * (1.0 - effective_resistance))
 
         # 3. Calculates the total burn rate depending on base burn rate, size, state and temperature.
-        total_burn_rate: float = (cfg.energy_burn_rate * cfg.size * state_modifier) + thermal_state_modifier
+        total_burn_rate: float = (cfg.energy_burn_rate * cfg.size * metabolism_modifier) + thermal_metabolism_modifier
         
         self.energy -= total_burn_rate
 
@@ -251,7 +228,8 @@ class Agent:
 @dataclass(frozen=True)
 class ConfigAgentManager:
     
-    # Physical Genetics.
+    #TODO WOO
+    # Physical Genetics. 
     MIN_SIZE: int = 1
     MAX_SIZE: int = 3
     MIN_AGE: int = 50
@@ -290,6 +268,31 @@ class ConfigAgentManager:
     BIRTH_ENERGY_FACTOR: float = 0.5
     AGENT_MATRIX_ID: int = 1
 
+
+    # Class Constants.
+    METABOLISM_INFECTED_MULT: float = 1.25
+    METABOLISM_BLEEDING_MULT: float = 1.25
+    METABOLISM_SLEEPING_MULT: float = 0.2
+    METABOLISM_PREGNANT_MULT: float = 1.5
+    METABOLISM_HIBERNATING_MULT: float = 0.05
+    METABOLISM_TEMP_HARSHNESS: float = 0.1
+
+    BIRTH_ENERGY_FACTOR: float = 0.5
+
+    DISEASE_HEALTH_COST: int = 5 #TODO Add different types of diseases.
+
+    BLEEDING_HEALTH_COST: int = 10
+
+    MOVE_ENERGY_COST: int = 5
+    MOVEMENT_DIRECTIONS: tuple[move_direction, move_direction, move_direction, move_direction]
+
+    EMPTY_MATRIX_ID: int = 0
+    AGENT_MATRIX_ID: int = 1
+
+    GESTATION_TIME: int = 250
+
+    MAX_WASTE_CAPACITY: int = 0
+
     def __post_init__(self) -> None:
         pass
 
@@ -298,12 +301,10 @@ class AgentManager:
     def __init__(
             self,
             config_agent_manager: ConfigAgentManager,
-            config_agent: ConfigAgent,
             simulation_size: int
     ) -> None:
         # 1. Defines input parameters.
         self.config_agent_manager: ConfigAgentManager = config_agent_manager
-        self.config_agent: ConfigAgent = config_agent
         self.simulation_size: int = simulation_size
 
         # 2. Creates agent matrices.
@@ -321,7 +322,8 @@ class AgentManager:
         self.agents_df: DataFrame = self._create_empty_agent_df()
 
     def _create_empty_agent_df(self) -> DataFrame:   
-        base_agent_df: DataFrame = {
+        agent_df_schema: dict = {
+            #TODO WOO
             # Identity Genetics.
             "sex": pl.UInt8, 
             "clan_id": pl.UInt8,
@@ -331,48 +333,67 @@ class AgentManager:
             "max_age": pl.UInt8,
             "max_health": pl.UInt8,
             "max_energy": pl.UInt8,
-            "temperature": pl.UInt8,
-            "energy_burn_rate": pl.Float16,
-            "resistance": pl.Float16,
+            "optimal_temperature": pl.UInt8,
+            "base_energy_burn_rate": pl.Float32, # Use instead of Float16, since it is not natively supported by many CPUs.
+            "total_energy_burn_rate": pl.Float32,
+            "resistance": pl.Float32,
 
             # Survival Genetics.
-            "chronotype": pl.Float16,
-            "plant_digestion_efficiency": pl.Float16,
-            "meat_digestion_efficiency": pl.Float16,
+            "chronotype": pl.Float32,
+            "plant_digestion_efficiency": pl.Float32,
+            "meat_digestion_efficiency": pl.Float32,
             "has_venom": pl.Boolean, 
             "has_mimicry": pl.Boolean,
 
             # Behavioral Genetics.
-            "kinship_loyalty": pl.Float16,
-            "parental_instinct": pl.Float16,
-            "hostility": pl.Float16,
-            "fight_flight_bias":pl.Float16,
+            "kinship_loyalty": pl.Float32,
+            "parental_instinct": pl.Float32,
+            "hostility": pl.Float32,
+            "fight_flight_bias":pl.Float32,
 
             # Metabolic States.
-            "age":pl.UInt8,
             "is_infected": pl.Boolean,
             "is_bleeding": pl.Boolean,
             "is_sleeping": pl.Boolean,
             "is_pregnant": pl.Boolean,
             "is_hibernating": pl.Boolean,
+            "metabolism_modifier": pl.Float32,
+            "health_cost": pl.UInt8,
 
             # Timers & Counters.
             "hibernation_timer":pl.UInt8,
             "gestation_timer": pl.UInt8,
-            "waste_accumulated": pl.UInt8
+            "waste_accumulated": pl.UInt8,
+
+            # Positional States.
+            "x_pos": pl.UInt8,
+            "y_pos": pl.UInt8,
+
+            # Vital States.
+            "age": pl.UInt8,
+            "health": pl.Float32,
+            "energy": pl.Float32,
+            "effective_resistance": pl.Float32,
+
+            # Derived States.
+            "color_r": pl.UInt8,
+            "color_g": pl.UInt8,
+            "color_b": pl.UInt8,
         }
 
-        return base_agent_df
+        return pl.DataFrame(schema=agent_df_schema) # Creates a DataFrame from the schema dictionary.
 
     def create_agents(
             self,
             count: int
     ) -> None:
+        #TODO WOO: The order of the attributes in the dictionary.
         # 1. Creates a random number generator instance.
         rng = np.random.default_rng()
 
         # 2. Generates all random data in a single dictionary definition.
         agent_data: dict[str, NDArray] = {
+            #TODO WOO
             # Identity Genetics.
             "sex": rng.integers(low=0, high=2 + 1, size=count), #TODO ACV
             "clan_id": rng.integers(low=0, high=0 + 1, size=count), #TODO Add Clan ID mechanism.
@@ -382,14 +403,14 @@ class AgentManager:
             "max_age": rng.integers(low=self.config_agent_manager.MIN_AGE, high=self.config_agent_manager.MAX_AGE + 1, size=count),
             "max_health": rng.integers(low=self.config_agent_manager.MIN_HEALTH, high=self.config_agent_manager.MAX_HEALTH + 1, size=count),
             "max_energy": rng.integers(low=self.config_agent_manager.MIN_ENERGY, high=self.config_agent_manager.MAX_ENERGY + 1, size=count),
-            "temperature": rng.integers(low=self.config_agent_manager.MIN_TEMP, high=self.config_agent_manager.MAX_TEMP + 1, size=count),
-            "energy_burn_rate": rng.uniform(low=self.config_agent_manager.MIN_ENERGY_BURN, high=self.config_agent_manager.MAX_ENERGY_BURN + 1, size=count),
+            "optimal_temperature": rng.integers(low=self.config_agent_manager.MIN_TEMP, high=self.config_agent_manager.MAX_TEMP + 1, size=count),
+            "base_energy_burn_rate": rng.uniform(low=self.config_agent_manager.MIN_ENERGY_BURN, high=self.config_agent_manager.MAX_ENERGY_BURN + 1, size=count),
             "resistance": rng.uniform(low=self.config_agent_manager.MIN_RESISTANCE, high=self.config_agent_manager.MAX_RESISTANCE + 1, size=count),
 
             # Survival Genetics.
             "chronotype": rng.uniform(low=self.config_agent_manager.MIN_CHRONOTYPE, high=self.config_agent_manager.MAX_CHRONOTYPE + 1, size=count),
             "plant_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_PLANT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST + 1, size=count),
-            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST + 1, size=count),
+            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_MEAT_DIGEST + 1, size=count),
             "has_venom": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.VENOM_CHANCE, # Creates a boolean array according to the condition.
             "has_mimicry": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.MIMICRY_CHANCE,
 
@@ -406,11 +427,13 @@ class AgentManager:
             "is_sleeping": np.full(shape=count, fill_value=False, dtype=bool),
             "is_pregnant": np.full(shape=count, fill_value=False, dtype=bool),
             "is_hibernating": np.full(shape=count, fill_value=False, dtype=bool),
+            "metabolism_modifier": np.ones(shape=count, dtype=pl.Float32),
+            "health_cost": np.ones(shape=count, dtype=pl.Float32),
 
             # Timers & Counters.
-            "hibernation_timer": np.zeros(shape=count, dtype=np.uint16),
-            "gestation_timer": np.zeros(shape=count, dtype=np.uint16),
-            "waste_accumulated": np.zeros(shape=count, dtype=np.uint16)
+            "hibernation_timer": np.zeros(shape=count, dtype=pl.UInt8),
+            "gestation_timer": np.zeros(shape=count, dtype=pl.UInt8),
+            "waste_accumulated": np.zeros(shape=count, dtype=pl.UInt8),
         }
 
         # 3. Creates the DataFrame.
@@ -418,8 +441,10 @@ class AgentManager:
 
         # 4. Creates columns for the attributes, that have starting values.
         new_agents_df = new_agents_df.with_columns(
-            pl.col("max_health").alias("health"), # Gets the reference to the column.
-            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).alias("energy")  # Name of the added attribute.
+            (pl.col("max_health").alias("health")), # Gets the reference to the column.
+            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).alias("energy"),  # Name of the added attribute.
+            (pl.col("resistance").alias("effective_resistance")),
+            (pl.col("base_energy_burn_rate").alias("total_energy_burn_rate"))
         )
 
         # 5. Adds derived color columns.
@@ -455,12 +480,109 @@ class AgentManager:
 
         # Add position columns to the DataFrame.
         new_agents_df = new_agents_df.with_columns(
-            (random_indices_flat % self.simulation_size).alias("x_pos"), # No need for 'lit' when the source is already an array.
-            (random_indices_flat // self.simulation_size).alias("y_pos")
+            (random_indices_flat % self.simulation_size)
+            .alias("x_pos"), # No need for 'lit' when the source is already an array.
+            (random_indices_flat // self.simulation_size)
+            .alias("y_pos")
         )
 
         # 7. Updates the agent DataFrame.
         self.agents_df = pl.concat([self.agents_df, new_agents_df])
-        
-    def update_agents(self) -> None:
-        pass
+
+    def update_agents(
+            self,
+            map_temperature: int
+    ) -> None:
+        df: DataFrame = self.agents_df
+        cfg: ConfigAgentManager = self.config_agent_manager
+
+        # 1. Cheks whether the agent dies.
+        df = df.filter((pl.col("energy") > 0) & (pl.col("health") > 0))
+
+        # 2. Updates the agents age.
+        df = df.with_columns(
+            (pl.col("age") + 1)
+            .alias("age")
+        )
+
+        # 3. Calculates the effective resistance.
+        df = df.with_columns(
+            pl.when((pl.col("age")) > (pl.col("max_age") // 2)) # If the age threshold is met.
+            .then((1.0 - ((pl.col("age") - pl.col("max_age") // 2) / (pl.col("max_age") - pl.col("max_age") // 2)) ** 2).clip(lower_bound=0.1))
+            .otherwise(1.0)
+            .alias("effective_resistance")
+        )
+
+        # 4. Processes the metabolism.
+        # Calculates the metabolism modifier.
+        df = df.with_columns(
+            (
+                pl.lit(1.0) # Starts with a base metabolism multiplier of 1.0.
+                * pl.when(pl.col("is_infected"))
+                .then(cfg.METABOLISM_INFECTED_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_bleeding"))
+                .then(cfg.METABOLISM_BLEEDING_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_sleeping"))
+                .then(cfg.METABOLISM_SLEEPING_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_pregnant"))
+                .then(cfg.METABOLISM_PREGNANT_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_hibernating"))
+                .then(cfg.METABOLISM_HIBERNATING_MULT)
+                .otherwise(1.0)
+            )
+            .alias("metabolism_modifier")
+        )
+
+        # Calculates the total burn rate depending on base burn rate, metabolism modifier, size and temperature.
+        df = df.with_columns(
+            (pl.col("base_energy_burn_rate") * pl.col("metabolism_modifier") * pl.col("size")) + ((map_temperature - pl.col("optimal_temperature").abs()) * cfg.METABOLISM_TEMP_HARSHNESS * (pl.lit(1.0) - pl.col("effective_resistance")))
+            .alias("total_energy_burn_rate")
+        )
+
+        # Deducts the calculated total burn rate from current energy.
+        df = df.with_columns(
+            (pl.col("energy") - pl.col("total_energy_burn_rate"))
+            .alias("energy")
+        )
+
+        # 5. Handles the disease, bleeding, gestation and waste accumulation states.
+        # Calculates the health cost.
+        df = df.with_columns(
+            (
+                pl.lit(0) # Starts with base health cost of 0.
+                + pl.when(pl.col("is_infected"))
+                .then(cfg.DISEASE_HEALTH_COST)
+                .otherwise(0)
+                + pl.when(pl.col("is_bleeding"))
+                .then(cfg.BLEEDING_HEALTH_COST)
+                .otherwise(0)
+            )
+            .alias("health_cost")
+        )
+
+        # Deducts the health cost from the current health.
+        df = df.with_columns(
+            (pl.col("health") - pl.col("health_cost"))
+            .alias("health")
+        )
+
+        # Updates the gestation timer and give birth logic.
+        df = df.with_columns(
+            pl.when(pl.col("is_pregnant"))
+            .then(pl.col("gestation_timer") + 1)
+            .otherwise(pl.col("gestation_timer"))
+        )
+
+        df = df.with_columns(
+            pl.when((pl.col("gestation_timer")) == (cfg.GESTATION_TIME))
+            .then() #TODO Add birth logic.
+        )
+
+        # Handles the waste.
+        df = df.with_columns(
+            #TODO Identify the agents that need to drop waste, drop the waste and reset the waste accumulated.
+        )
