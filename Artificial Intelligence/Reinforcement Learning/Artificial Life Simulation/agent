@@ -13,6 +13,8 @@
 
 #! PW: Possibly wrong.
 
+from typing import Tuple
+
 import numpy as np
 import polars as pl
 from polars import DataFrame
@@ -20,216 +22,28 @@ from polars import DataFrame
 from dataclasses import dataclass
 from numpy.typing import NDArray
 
-# Custom type hints.
-move_direction = tuple[int, int]
+from dataclasses import dataclass
+from typing import Tuple
 
-@dataclass(frozen=True)
-class ConfigAgent:
-    # Identity Genetics.
-    clan_id: int
-    sex: int # (0, 1, 2).
-
-    # Physical Genetics.
-    size: int #(1, 2, 3).
-    max_age: int
-    max_health: int
-    max_energy: int
-    energy_burn_rate: float
-    optimal_temperature: int
-    resistance: float
-
-    # Survival Genetics.
-    chronotype: float
-    has_venom: bool
-    has_mimicry: bool
-    plant_digestion_efficiency: float
-    meat_digestion_efficiency: float
-    
-    # Behavioral Genetics.
-    kinship_loyalty: float
-    parental_instinct: float
-    hostility: float
-    fight_flight_bias: float
-
-    def __post_init__(self) -> None:
-        pass
-
-class Agent:
-    def __init__(
-            self,
-            config_agent: ConfigAgent,
-    ) -> None:
-        # Define input parameters.
-        self.config_agent: ConfigAgent = config_agent
-
-    def _calculate_senescence(self) -> float:
-
-        # Calculates the age threshold for the scenescence to affect.
-        threshold: int = self.config_agent.max_age // 2
-
-        if self.age > threshold:
-            multiplier: float = 1.0 - ((self.age - threshold) / (self.config_agent.max_age - threshold)) ** 2
-
-            return max(multiplier, 0.1)
-    
-        return 1.0 # If not, no senescene effect is seen, so the attributes stay the same.
-
-    def _process_metabolism(
-            self,
-            temperature: int,
-            effective_resistance: float
-    ) -> None:
-        cfg: ConfigAgent = self.config_agent
-
-        # 1. Calculates the state modifier.
-        metabolism_modifier: float = 1.0 # Base burn rate.
-
-        # Applies the extra states to the base burn rate.
-        if self.is_infected:
-            metabolism_modifier *= cfg.METABOLISM_INFECTED_MULT
-        if self.is_bleeding:
-            metabolism_modifier *= cfg.METABOLISM_BLEEDING_MULT
-        if self.is_sleeping:
-            metabolism_modifier *= cfg.METABOLISM_SLEEPING_MULT
-        if self.is_pregnant:
-            metabolism_modifier *= cfg.METABOLISM_PREGNANCY_MULT
-        if self.is_hibernating:
-            metabolism_modifier *=  cfg.METABOLISM_HIBERNATING_MULT
-
-        # 2. Calculates the termal state modifier.
-        temp_diff: int = abs(temperature - cfg.optimal_temperature)
-
-        thermal_metabolism_modifier: float = ((temp_diff * cfg.METABOLISM_TEMP_HARSHNESS) * (1.0 - effective_resistance))
-
-        # 3. Calculates the total burn rate depending on base burn rate, size, state and temperature.
-        total_burn_rate: float = (cfg.energy_burn_rate * cfg.size * metabolism_modifier) + thermal_metabolism_modifier
-        
-        self.energy -= total_burn_rate
-
-    def _handle_disease(
-            self,
-            effective_resistance: float
-    ) -> None:
-        # 1. Calculates health and energy costs.
-        health_cost: float = self.config_agent.DISEASE_HEALTH_COST * (1.0 - effective_resistance)
-        energy_cost: float = self.config_agent.DISEASE_ENERGY_COST * (1.0 - effective_resistance)
-
-        # 2. Deducts the costs.
-        self.health -= health_cost
-        self.energy -= energy_cost
-
-        # 3. Handles the transmission logic.
-        pass
-
-    def _handle_bleeding(
-            self,
-            effective_resistance: float
-    ) -> None:
-        # 1. Calculates health and energy costs.
-        health_cost: float = self.config_agent.BLEEDING_HEALTH_COST * (1.0 - effective_resistance)
-        energy_cost: float = self.config_agent.BLEEDING_ENERGY_COST * (1.0 - effective_resistance)
-
-        # 2. Deducts the costs.
-        self.health -= health_cost
-        self.energy -= energy_cost
-        
-    def _give_birth(self) -> None:
-        pass #TODO Give birth.
-
-    def _handle_waste(self) -> None:
-        pass #TODO Handles waste based on eaten food.
-
-    def _move(
-            self,
-            direction_index: int, # (0 = Up, 1 = Right, 2 = Down, 3 = Left).
-            simulation_size: int,
-            agent_matrix: NDArray,
-            agent_color_matrix: NDArray
-    ) -> tuple[bool, NDArray|None, NDArray|None]:
-        # 1. Calculates the target based on the direction.
-        x, y = self.x, self.y
-
-        dx, dy = self.config_agent.MOVEMENT_DIRECTIONS[direction_index]
-
-        # 2. Checks out of bound.
-        new_x, new_y = x + dx, y + dy
-        
-        if not(0 <= new_x < simulation_size) or not(0 <= new_y < simulation_size):
-            return (False, None)
-
-        # 3. Checks collision. 
-        if agent_matrix[new_y, new_x]:
-            #TODO Implement the agent trampling logic here.
-            return (False, None)
-        
-        # 4. Deletes the old position and updates the new position.
-        agent_matrix[y, x] = self.config_agent.EMPTY_MATRIX_ID
-        agent_color_matrix[y, x] = self.config_agent.EMPTY_MATRIX_ID
-
-        agent_matrix[new_y, new_x] = self.config_agent.AGENT_MATRIX_ID
-        agent_color_matrix[new_y, new_x] = self.color
-        self.x, self.y = new_x, new_y
-        
-        # 5. Deducts energy.
-        self.energy -= self.config_agent.MOVE_ENERGY_COST
-
-        # 6. Return the validation of move for Reinforcement Learning and the new matrix to update in visualization.
-        return (True, agent_matrix) 
-    
-    def _eat(
-            self,
-            resource_matrix: NDArray
-    ) -> tuple[bool, NDArray | None]:
-        pass
-    
-    def agent_loop(
-            self,
-            temperature: int
-    ) -> None:
-        # A. METABOLISM ACTIONS.
-        # 1. Check whether the agent dies.
-        if (self.energy < 0) or (self.health < 0):
-            pass #TODO DIE (deletes from the dictionary).
-
-        # 2. Updates the agents age.
-        self.age += 1
-
-        # 3. Calculates the senescence multiplier and upon that effective resistance.
-        senescence_multiplier: float = self._calculate_senescence()
-
-        effective_resistance: float = self.config_agent.resistance * senescence_multiplier
-        
-        # 4. Processes the metabolism.
-        self._process_metabolism(
-            temperature = temperature,
-            effective_resistance = effective_resistance
-        )
-
-        # 5. Handles the disease state.
-        if self.is_infected:
-            self._handle_disease(effective_resistance = effective_resistance)
-
-        # 6. Handles the bleeding state.
-        if self.is_bleeding:
-            self._handle_bleeding(effective_resistance = effective_resistance)
-
-        # 7. Updates the gestation.
-        if self.is_pregnant:
-            self.gestation_timer += 1
-
-            if self.gestation_timer == self.config_agent.GESTATION_TIME:
-                self._give_birth()
-        
-        # 8. Handles the waste.
-        self._handle_waste()
-
-        # B. PHYSICAL ACTIONS.
+# Type alias for clarity
+MoveDirection = Tuple[int, int]
 
 @dataclass(frozen=True)
 class ConfigAgentManager:
-    
-    #TODO WOO
-    # Physical Genetics. 
+    """
+    Configuration for the Agent Manager.
+    Variables are grouped logically by function.
+    """
+
+    # 1. SIMULATION & MATRIX CONSTANTS
+    EMPTY_MATRIX_ID: int = 0
+    AGENT_MATRIX_ID: int = 1
+    # Order: Up, Right, Down, Left
+    MOVEMENT_DIRECTIONS: Tuple[MoveDirection, MoveDirection, MoveDirection, MoveDirection] = (
+        (0, -1), (1, 0), (0, 1), (-1, 0)
+    )
+
+    # 2. PHYSICAL GENETICS
     MIN_SIZE: int = 1
     MAX_SIZE: int = 3
     MIN_AGE: int = 50
@@ -240,22 +54,24 @@ class ConfigAgentManager:
     MAX_ENERGY: int = 250
     MIN_TEMP: int = 0
     MAX_TEMP: int = 50
+    
     MIN_ENERGY_BURN: float = 0.1
     MAX_ENERGY_BURN: float = 1.0
     MIN_RESISTANCE: float = 0.1
     MAX_RESISTANCE: float = 1.0
-    
-    # Survival Genetics.
+
+    # 3. SURVIVAL GENETICS (Ranges & Chances)
     MIN_CHRONOTYPE: float = 0.1
     MAX_CHRONOTYPE: float = 1.0
     MIN_PLANT_DIGEST: float = 0.1
     MAX_PLANT_DIGEST: float = 1.0
     MIN_MEAT_DIGEST: float = 0.1
     MAX_MEAT_DIGEST: float = 1.0
+    
     VENOM_CHANCE: float = 0.1
     MIMICRY_CHANCE: float = 0.1
 
-    # Behavioral Genetics.
+    # 4. BEHAVIORAL GENETICS (Ranges)
     MIN_KINSHIP: float = 0.1
     MAX_KINSHIP: float = 1.0
     MIN_PARENTAL: float = 0.1
@@ -265,11 +81,8 @@ class ConfigAgentManager:
     MIN_FIGHT_FLIGHT: float = 0.1
     MAX_FIGHT_FLIGHT: float = 1.0
 
+    # 5. METABOLISM & MULTIPLIERS
     BIRTH_ENERGY_FACTOR: float = 0.5
-    AGENT_MATRIX_ID: int = 1
-
-
-    # Class Constants.
     METABOLISM_INFECTED_MULT: float = 1.25
     METABOLISM_BLEEDING_MULT: float = 1.25
     METABOLISM_SLEEPING_MULT: float = 0.2
@@ -277,24 +90,138 @@ class ConfigAgentManager:
     METABOLISM_HIBERNATING_MULT: float = 0.05
     METABOLISM_TEMP_HARSHNESS: float = 0.1
 
-    BIRTH_ENERGY_FACTOR: float = 0.5
-
-    DISEASE_HEALTH_COST: int = 5 #TODO Add different types of diseases.
-
+    # 6. COSTS & PENALTIES
+    MOVE_ENERGY_COST: int = 5
+    DISEASE_HEALTH_COST: int = 5
     BLEEDING_HEALTH_COST: int = 10
 
-    MOVE_ENERGY_COST: int = 5
-    MOVEMENT_DIRECTIONS: tuple[move_direction, move_direction, move_direction, move_direction]
-
-    EMPTY_MATRIX_ID: int = 0
-    AGENT_MATRIX_ID: int = 1
-
+    # 7. TIMERS & CAPACITIES
     GESTATION_TIME: int = 250
-
-    MAX_WASTE_CAPACITY: int = 0
+    MAX_WASTE_CAPACITY: int = 100
 
     def __post_init__(self) -> None:
-        pass
+        """
+        Validates all configuration parameters immediately after initialization.
+        Checks match the order of declaration.
+        """
+        
+        # 1. SIMULATION & MATRIX CONSTANTS Validation 
+        if not isinstance(self.EMPTY_MATRIX_ID, int) or not isinstance(self.AGENT_MATRIX_ID, int):
+            raise TypeError("Matrix IDs must be integers.")
+        
+        if self.EMPTY_MATRIX_ID == self.AGENT_MATRIX_ID:
+            raise ValueError(f"EMPTY_MATRIX_ID and AGENT_MATRIX_ID cannot be the same ({self.EMPTY_MATRIX_ID}).")
+
+        if not isinstance(self.MOVEMENT_DIRECTIONS, tuple):
+            raise TypeError("MOVEMENT_DIRECTIONS must be a tuple.")
+        if len(self.MOVEMENT_DIRECTIONS) != 4:
+            raise ValueError(f"MOVEMENT_DIRECTIONS must have 4 elements, got {len(self.MOVEMENT_DIRECTIONS)}.")
+        for d in self.MOVEMENT_DIRECTIONS:
+            if not isinstance(d, tuple) or len(d) != 2 or not all(isinstance(x, int) for x in d):
+                raise TypeError("Each movement direction must be a tuple of 2 integers (dx, dy).")
+
+        # 2. PHYSICAL GENETICS Validation 
+        int_phys_ranges = [
+            ("SIZE", self.MIN_SIZE, self.MAX_SIZE),
+            ("AGE", self.MIN_AGE, self.MAX_AGE),
+            ("HEALTH", self.MIN_HEALTH, self.MAX_HEALTH),
+            ("ENERGY", self.MIN_ENERGY, self.MAX_ENERGY),
+            ("TEMP", self.MIN_TEMP, self.MAX_TEMP),
+        ]
+        for name, min_val, max_val in int_phys_ranges:
+            if not isinstance(min_val, int) or not isinstance(max_val, int):
+                raise TypeError(f"MIN_{name} and MAX_{name} must be integers.")
+            if min_val < 0:
+                raise ValueError(f"MIN_{name} must be non-negative.")
+            if max_val < min_val:
+                raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
+
+        float_phys_ranges = [
+            ("ENERGY_BURN", self.MIN_ENERGY_BURN, self.MAX_ENERGY_BURN),
+            ("RESISTANCE", self.MIN_RESISTANCE, self.MAX_RESISTANCE),
+        ]
+        for name, min_val, max_val in float_phys_ranges:
+            if not isinstance(min_val, (float, int)) or not isinstance(max_val, (float, int)):
+                raise TypeError(f"MIN_{name} and MAX_{name} must be numbers.")
+            if min_val < 0:
+                raise ValueError(f"MIN_{name} must be non-negative.")
+            if max_val < min_val:
+                raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
+
+        #  3. SURVIVAL GENETICS Validation 
+        float_surv_ranges = [
+            ("CHRONOTYPE", self.MIN_CHRONOTYPE, self.MAX_CHRONOTYPE),
+            ("PLANT_DIGEST", self.MIN_PLANT_DIGEST, self.MAX_PLANT_DIGEST),
+            ("MEAT_DIGEST", self.MIN_MEAT_DIGEST, self.MAX_MEAT_DIGEST),
+        ]
+        for name, min_val, max_val in float_surv_ranges:
+            if not isinstance(min_val, (float, int)) or not isinstance(max_val, (float, int)):
+                raise TypeError(f"MIN_{name} and MAX_{name} must be numbers.")
+            if min_val < 0:
+                raise ValueError(f"MIN_{name} must be non-negative.")
+            if max_val < min_val:
+                raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
+
+        probs = [("VENOM_CHANCE", self.VENOM_CHANCE), ("MIMICRY_CHANCE", self.MIMICRY_CHANCE)]
+        for name, val in probs:
+            if not isinstance(val, (float, int)):
+                raise TypeError(f"{name} must be a number.")
+            if not (0.0 <= val <= 1.0):
+                raise ValueError(f"{name} must be between 0.0 and 1.0.")
+
+        #  4. BEHAVIORAL GENETICS Validation 
+        float_behav_ranges = [
+            ("KINSHIP", self.MIN_KINSHIP, self.MAX_KINSHIP),
+            ("PARENTAL", self.MIN_PARENTAL, self.MAX_PARENTAL),
+            ("HOSTILITY", self.MIN_HOSTILITY, self.MAX_HOSTILITY),
+            ("FIGHT_FLIGHT", self.MIN_FIGHT_FLIGHT, self.MAX_FIGHT_FLIGHT),
+        ]
+        for name, min_val, max_val in float_behav_ranges:
+            if not isinstance(min_val, (float, int)) or not isinstance(max_val, (float, int)):
+                raise TypeError(f"MIN_{name} and MAX_{name} must be numbers.")
+            if min_val < 0:
+                raise ValueError(f"MIN_{name} must be non-negative.")
+            if max_val < min_val:
+                raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
+
+        #  5. METABOLISM & MULTIPLIERS Validation 
+        multipliers = [
+            ("BIRTH_ENERGY_FACTOR", self.BIRTH_ENERGY_FACTOR),
+            ("METABOLISM_INFECTED_MULT", self.METABOLISM_INFECTED_MULT),
+            ("METABOLISM_BLEEDING_MULT", self.METABOLISM_BLEEDING_MULT),
+            ("METABOLISM_SLEEPING_MULT", self.METABOLISM_SLEEPING_MULT),
+            ("METABOLISM_PREGNANT_MULT", self.METABOLISM_PREGNANT_MULT),
+            ("METABOLISM_HIBERNATING_MULT", self.METABOLISM_HIBERNATING_MULT),
+            ("METABOLISM_TEMP_HARSHNESS", self.METABOLISM_TEMP_HARSHNESS),
+        ]
+        for name, val in multipliers:
+            if not isinstance(val, (float, int)):
+                raise TypeError(f"{name} must be a number.")
+            if val < 0:
+                raise ValueError(f"{name} must be non-negative.")
+
+        #  6. COSTS & PENALTIES Validation 
+        costs = [
+            ("MOVE_ENERGY_COST", self.MOVE_ENERGY_COST),
+            ("DISEASE_HEALTH_COST", self.DISEASE_HEALTH_COST),
+            ("BLEEDING_HEALTH_COST", self.BLEEDING_HEALTH_COST),
+        ]
+        for name, val in costs:
+            if not isinstance(val, int):
+                raise TypeError(f"{name} must be an integer.")
+            if val < 0:
+                raise ValueError(f"{name} must be non-negative.")
+
+        #  7. TIMERS & CAPACITIES Validation 
+        timers = [
+            ("GESTATION_TIME", self.GESTATION_TIME),
+            ("MAX_WASTE_CAPACITY", self.MAX_WASTE_CAPACITY),
+        ]
+        for name, val in timers:
+            if not isinstance(val, int):
+                raise TypeError(f"{name} must be an integer.")
+            if val < 0:
+                raise ValueError(f"{name} must be non-negative.")
 
 class AgentManager:
 
@@ -314,7 +241,7 @@ class AgentManager:
         )
 
         self.agent_color_matrix: NDArray = np.zeros(
-            shape = (self.simulation_size, self.simulation_size),
+            shape = (self.simulation_size, self.simulation_size, 3),
             dtype = np.uint8
         )
 
@@ -368,6 +295,9 @@ class AgentManager:
             # Positional States.
             "x_pos": pl.UInt8,
             "y_pos": pl.UInt8,
+            "new_x_pos": pl.Int8,
+            "new_y_pos": pl.Int8,
+            "valid_move": pl.Boolean,
 
             # Vital States.
             "age": pl.UInt8,
@@ -422,11 +352,11 @@ class AgentManager:
 
             # Metabolic States.
             "age": np.zeros(shape=count, dtype=np.uint8),
-            "is_infected": np.full(shape=count, fill_value=False, dtype=bool),
-            "is_bleeding": np.full(shape=count, fill_value=False, dtype=bool),
-            "is_sleeping": np.full(shape=count, fill_value=False, dtype=bool),
-            "is_pregnant": np.full(shape=count, fill_value=False, dtype=bool),
-            "is_hibernating": np.full(shape=count, fill_value=False, dtype=bool),
+            "is_infected": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
+            "is_bleeding": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
+            "is_sleeping": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
+            "is_pregnant": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
+            "is_hibernating": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
             "metabolism_modifier": np.ones(shape=count, dtype=pl.Float32),
             "health_cost": np.ones(shape=count, dtype=pl.Float32),
 
@@ -434,6 +364,8 @@ class AgentManager:
             "hibernation_timer": np.zeros(shape=count, dtype=pl.UInt8),
             "gestation_timer": np.zeros(shape=count, dtype=pl.UInt8),
             "waste_accumulated": np.zeros(shape=count, dtype=pl.UInt8),
+
+            "valid_move": np.full(shape=count, fill_value=False, dtype=pl.Boolean)
         }
 
         # 3. Creates the DataFrame.
@@ -471,11 +403,18 @@ class AgentManager:
             replace = False
         )
 
-        # Updates the agent matrix at the choosen spots.
+        # Updates the agent matrix.
         np.put(
             a = self.agent_matrix,
             ind = random_indices_flat,
             v = self.config_agent_manager.AGENT_MATRIX_ID
+        )
+
+        # Updates the agent color matrix.
+        np.put(
+            a = self.agent_color_matrix,
+            ind = random_indices_flat,
+            v = (pl.col("color_r"), pl.col("color_g"), pl.col("color_b"))
         )
 
         # Add position columns to the DataFrame.
@@ -484,10 +423,100 @@ class AgentManager:
             .alias("x_pos"), # No need for 'lit' when the source is already an array.
             (random_indices_flat // self.simulation_size)
             .alias("y_pos")
+            (random_indices_flat % self.simulation_size)
+            .alias("new_x_pos"),
+            (random_indices_flat // self.simulation_size)
+            .alias("new_y_pos")
         )
 
         # 7. Updates the agent DataFrame.
         self.agents_df = pl.concat([self.agents_df, new_agents_df])
+
+    def _move_agents(
+            self,
+            old_df: DataFrame,
+            direction_index: int # (0: Up, 1: Right, 2: Down, 3: Left).
+    ) -> tuple[NDArray, DataFrame]:
+        # 1. Calculates the target based on the direction.
+        dx, dy = self.config_agent_manager.MOVEMENT_DIRECTIONS[direction_index]
+
+        new_df: DataFrame = old_df.with_columns(
+            (pl.col("x_pos") + dx).alias("new_x_pos"),
+            (pl.col("y_pos") + dy).alias("new_y_pos")
+        )
+
+        # 2. Checks for out of bound and updates the columns.
+        new_df = new_df.with_columns(
+            (
+                (pl.col("new_x_pos") >= 0) &
+                (pl.col("new_x_pos") < self.simulation_size) &
+                (pl.col("new_y_pos") >= 0) & 
+                (pl.col("new_y_pos") < self.simulation_size)
+            ).alias("valid_move")
+        )
+
+        # 3. Checks for colision.
+        # Extract the polars columns as numpy arrays.
+        potential_y: NDArray = new_df["new_y_pos"].to_numpy(dtype=np.int16) # For safe map size.
+        potential_x: NDArray = new_df["new_x_pos"].to_numpy(dtype=np.int16) 
+
+        # Clips the coordinates to safe range (0 to size-1).
+        safe_y: NDArray = np.clip(potential_y, 0, self.simulation_size - 1)
+        safe_x: NDArray = np.clip(potential_x, 0, self.simulation_size - 1)
+
+        # Checks the matrix using the safe coordinates.
+        is_empty_spot: NDArray = (self.agent_matrix[safe_y, safe_x] == self.config_agent_manager.EMPTY_MATRIX_ID)
+
+        # 4. Updates the valid moves.
+        new_df = new_df.with_columns(
+            (pl.col("valid_move") & is_empty_spot).alias("valid_move")
+        )
+
+        # 5. Deletes the old position and updates the new.
+        # Extract the polar columns as numpy arrays.
+        old_pos_y: NDArray = new_df["y_pos"].to_numpy(dtype=np.uint8)
+        old_pos_x: NDArray = new_df["x_pos"].to_numpy(dtype=np.uint8)
+
+        color_r: NDArray = new_df["color_r"].to_numpy(dtype=np.uint8)
+        color_g: NDArray = new_df["color_g"].to_numpy(dtype=np.uint8)
+        color_b: NDArray = new_df["color_b"].to_numpy(dtype=np.uint8)
+
+        valid_move: NDArray = new_df["valid_move"].to_numpy(dtype=np.bool_)
+
+        # Deletes the old positions.
+        self.agent_matrix[old_pos_y, old_pos_x] = self.config_agent_manager.EMPTY_MATRIX_ID
+        self.agent_color_matrix[old_pos_y, old_pos_x, :] = self.config_agent_manager.EMPTY_MATRIX_ID
+
+        # Updates the new columns.
+        new_df = new_df.with_columns(
+            pl.when(pl.col("valid_move"))
+            .then(
+                pl.col("new_x_pos").alias("x_pos"),
+            )
+            .otherwise(
+                pl.col("x_pos").alias("x_pos"),
+            )
+        )
+
+        new_df = new_df.with_columns(
+            pl.when(pl.col("valid_move"))
+            .then(
+                pl.col("new_y_pos").alias("y_pos")
+            )
+            .otherwise(
+                pl.col("y_pos").alias("y_pos")
+            )
+        )
+
+        # Extracts the newly updated y- and x-positions.
+        collision_updated_y_pos: NDArray = new_df["y_pos"].to_numpy(dtype=np.uint8)
+        collision_updated_x_pos: NDArray = new_df["x_pos"].to_numpy(dtype=np.uint8)
+
+        # Updates the matrices.
+        self.agent_matrix[collision_updated_y_pos, collision_updated_x_pos] = self.config_agent_manager.AGENT_MATRIX_ID
+        self.agent_color_matrix[collision_updated_y_pos, collision_updated_x_pos, :] = np.stack([color_r, color_g, color_b], axis=1) # (1000, 3).
+
+        return (valid_move, new_df)
 
     def update_agents(
             self,
@@ -586,3 +615,5 @@ class AgentManager:
         df = df.with_columns(
             #TODO Identify the agents that need to drop waste, drop the waste and reset the waste accumulated.
         )
+
+        # 6. Moves the agents.
