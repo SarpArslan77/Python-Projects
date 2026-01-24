@@ -16,6 +16,7 @@ import pygame
 
 if __name__ == "__main__":
 
+    # 1. Imports classes.
     from visualization import (
         ConfigVisualizer,
         Visualizer
@@ -26,34 +27,51 @@ if __name__ == "__main__":
         ResourceManager
     )
 
-    # 2. Pygame initialization.
-    pygame.init()
-
-    config_resource_manager = ConfigResourceManager(
-        simulation_size = 100,
-        waste_decay_rate = 0.0005,
-        corpse_decay_rate = 0.0005
+    from agent import(
+        ConfigAgentManager,
+        AgentManager
     )
 
+    # 2. Defines constants.
+    SIMULATION_SIZE: int = 100
+    WINDOW_SIZE: int = 800
+
+    # 3. Initializes pygame.
+    pygame.init()
+
+    # 4. Declares the classes.
+    config_resource_manager = ConfigResourceManager(
+        simulation_size = SIMULATION_SIZE
+    )
     resource_manager = ResourceManager(
         config_resource_manager = config_resource_manager
     )
 
-    #? resource_manager.debug_randomize_resources()
+    #! resource_manager.debug_randomize_resources()
+
+    config_agent_manager = ConfigAgentManager()
+    agent_manager = AgentManager(
+        config_agent_manager = config_agent_manager,
+        simulation_size = SIMULATION_SIZE
+    )
 
     config_visualizer = ConfigVisualizer(
-        simulation_size = 100,
-        window_size = 800,
-        blur_strength = 6,
-        terrain_thresholds = [20, 70, 95]
+        simulation_size = SIMULATION_SIZE,
+        window_size = WINDOW_SIZE
+    )
+    visualizer = Visualizer(
+        config_visualizer = config_visualizer,
+        resource_manager = resource_manager,
+        agent_manager = agent_manager
     )
 
-    visualizer = Visualizer(
-        config_visualizer=config_visualizer,
-        resource_manager = resource_manager
-    )
+    # 5. Creates the starting generation for the simulation.
+    agent_manager.create_agents(count=10)
 
     running: bool = True
     while running:
         running = visualizer.simulation_loop()
+
         resource_manager.resource_loop()
+
+        agent_manager.agent_loop(map_temperature=25)
