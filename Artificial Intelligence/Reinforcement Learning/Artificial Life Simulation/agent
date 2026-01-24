@@ -234,14 +234,9 @@ class AgentManager:
         self.config_agent_manager: ConfigAgentManager = config_agent_manager
         self.simulation_size: int = simulation_size
 
-        # 2. Creates agent matrices.
+        # 2. Creates agent matrix.
         self.agent_matrix: NDArray = np.zeros(
             shape = (self.simulation_size, self.simulation_size),
-            dtype = np.uint8
-        )
-
-        self.agent_color_matrix: NDArray = np.zeros(
-            shape = (self.simulation_size, self.simulation_size, 3),
             dtype = np.uint8
         )
 
@@ -335,20 +330,20 @@ class AgentManager:
             "max_energy": rng.integers(low=self.config_agent_manager.MIN_ENERGY, high=self.config_agent_manager.MAX_ENERGY + 1, size=count),
             "optimal_temperature": rng.integers(low=self.config_agent_manager.MIN_TEMP, high=self.config_agent_manager.MAX_TEMP + 1, size=count),
             "base_energy_burn_rate": rng.uniform(low=self.config_agent_manager.MIN_ENERGY_BURN, high=self.config_agent_manager.MAX_ENERGY_BURN + 1, size=count),
-            "resistance": rng.uniform(low=self.config_agent_manager.MIN_RESISTANCE, high=self.config_agent_manager.MAX_RESISTANCE + 1, size=count),
+            "resistance": rng.uniform(low=self.config_agent_manager.MIN_RESISTANCE, high=self.config_agent_manager.MAX_RESISTANCE, size=count),
 
             # Survival Genetics.
-            "chronotype": rng.uniform(low=self.config_agent_manager.MIN_CHRONOTYPE, high=self.config_agent_manager.MAX_CHRONOTYPE + 1, size=count),
-            "plant_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_PLANT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST + 1, size=count),
-            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_MEAT_DIGEST + 1, size=count),
+            "chronotype": rng.uniform(low=self.config_agent_manager.MIN_CHRONOTYPE, high=self.config_agent_manager.MAX_CHRONOTYPE, size=count),
+            "plant_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_PLANT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST, size=count),
+            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_MEAT_DIGEST, size=count),
             "has_venom": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.VENOM_CHANCE, # Creates a boolean array according to the condition.
             "has_mimicry": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.MIMICRY_CHANCE,
 
             # Behavioral Genetics.
-            "kinship_loyalty": rng.uniform(low=self.config_agent_manager.MIN_KINSHIP, high=self.config_agent_manager.MAX_KINSHIP + 1, size=count),
-            "parental_instinct": rng.uniform(low=self.config_agent_manager.MIN_PARENTAL, high=self.config_agent_manager.MAX_PARENTAL + 1, size=count),
-            "hostility": rng.uniform(low=self.config_agent_manager.MIN_HOSTILITY, high=self.config_agent_manager.MAX_HOSTILITY + 1, size=count),
-            "fight_flight_bias": rng.uniform(low=self.config_agent_manager.MIN_FIGHT_FLIGHT, high=self.config_agent_manager.MAX_FIGHT_FLIGHT + 1, size=count),
+            "kinship_loyalty": rng.uniform(low=self.config_agent_manager.MIN_KINSHIP, high=self.config_agent_manager.MAX_KINSHIP, size=count),
+            "parental_instinct": rng.uniform(low=self.config_agent_manager.MIN_PARENTAL, high=self.config_agent_manager.MAX_PARENTAL, size=count),
+            "hostility": rng.uniform(low=self.config_agent_manager.MIN_HOSTILITY, high=self.config_agent_manager.MAX_HOSTILITY, size=count),
+            "fight_flight_bias": rng.uniform(low=self.config_agent_manager.MIN_FIGHT_FLIGHT, high=self.config_agent_manager.MAX_FIGHT_FLIGHT, size=count),
 
             # Metabolic States.
             "age": np.zeros(shape=count, dtype=np.uint8),
@@ -373,10 +368,10 @@ class AgentManager:
 
         # 4. Creates columns for the attributes, that have starting values.
         new_agents_df = new_agents_df.with_columns(
-            (pl.col("max_health").alias("health")), # Gets the reference to the column.
-            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).alias("energy"),  # Name of the added attribute.
-            (pl.col("resistance").alias("effective_resistance")),
-            (pl.col("base_energy_burn_rate").alias("total_energy_burn_rate"))
+            (pl.col("max_health").cast(pl.UInt8).alias("health")), # Gets the reference to the column.
+            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).cast(pl.UInt8).alias("energy"),  # Name of the added attribute.
+            (pl.col("resistance").cast(pl.Float32).alias("effective_resistance")),
+            (pl.col("base_energy_burn_rate").cast(pl.Float32).alias("total_energy_burn_rate"))
         )
 
         # 5. Adds derived color columns.
@@ -410,27 +405,118 @@ class AgentManager:
             v = self.config_agent_manager.AGENT_MATRIX_ID
         )
 
-        # Updates the agent color matrix.
-        np.put(
-            a = self.agent_color_matrix,
-            ind = random_indices_flat,
-            v = (pl.col("color_r"), pl.col("color_g"), pl.col("color_b"))
-        )
-
-        # Add position columns to the DataFrame.
+        # Adds position columns to the DataFrame.
         new_agents_df = new_agents_df.with_columns(
-            (random_indices_flat % self.simulation_size)
-            .alias("x_pos"), # No need for 'lit' when the source is already an array.
-            (random_indices_flat // self.simulation_size)
-            .alias("y_pos")
-            (random_indices_flat % self.simulation_size)
-            .alias("new_x_pos"),
-            (random_indices_flat // self.simulation_size)
-            .alias("new_y_pos")
+            pl.lit(random_indices_flat % self.simulation_size).cast(pl.UInt8).alias("x_pos"), # 'lit' converts an array into polars column.
+            pl.lit(random_indices_flat // self.simulation_size).cast(pl.UInt8).alias("y_pos"),
+            pl.lit(random_indices_flat % self.simulation_size).cast(pl.UInt8).alias("new_x_pos"),
+            pl.lit(random_indices_flat // self.simulation_size).cast(pl.UInt8).alias("new_y_pos")
         )
 
         # 7. Updates the agent DataFrame.
         self.agents_df = pl.concat([self.agents_df, new_agents_df])
+
+    def _process_metabolism(
+            self,
+            old_df: DataFrame,
+            map_temperature: int
+    ) -> DataFrame:
+        cfg: ConfigAgentManager = self.config_agent_manager
+
+        # 1. Calculates the metabolism modifier.
+        new_df = old_df.with_columns(
+            (
+                pl.lit(1.0) # Starts with a base metabolism multiplier of 1.0.
+                * pl.when(pl.col("is_infected"))
+                .then(cfg.METABOLISM_INFECTED_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_bleeding"))
+                .then(cfg.METABOLISM_BLEEDING_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_sleeping"))
+                .then(cfg.METABOLISM_SLEEPING_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_pregnant"))
+                .then(cfg.METABOLISM_PREGNANT_MULT)
+                .otherwise(1.0)
+                * pl.when(pl.col("is_hibernating"))
+                .then(cfg.METABOLISM_HIBERNATING_MULT)
+                .otherwise(1.0)
+            )
+            .alias("metabolism_modifier")
+        )
+
+        # 2. Calculates the total burn rate depending on base burn rate, metabolism modifier, size and temperature.
+        new_df = new_df.with_columns(
+            (pl.col("base_energy_burn_rate") * pl.col("metabolism_modifier") * pl.col("size")) + ((map_temperature - pl.col("optimal_temperature").abs()) * cfg.METABOLISM_TEMP_HARSHNESS * (pl.lit(1.0) - pl.col("effective_resistance")))
+            .alias("total_energy_burn_rate")
+        )
+
+        # 3. Deducts the calculated total burn rate from current energy.
+        new_df = new_df.with_columns(
+            (pl.col("energy") - pl.col("total_energy_burn_rate"))
+            .alias("energy")
+        )
+
+        return new_df
+
+    def _process_vital_states(
+            self,
+            old_df: DataFrame
+    ) -> DataFrame:
+        cfg: ConfigAgentManager = self.config_agent_manager
+
+        # 1. Calculates the health cost.
+        new_df = old_df.with_columns(
+            (
+                pl.lit(0) # Starts with base health cost of 0.
+                + pl.when(pl.col("is_infected"))
+                .then(cfg.DISEASE_HEALTH_COST)
+                .otherwise(0)
+                + pl.when(pl.col("is_bleeding"))
+                .then(cfg.BLEEDING_HEALTH_COST)
+                .otherwise(0)
+            )
+            .alias("health_cost")
+        )
+
+        # 2. Deducts the health cost from the current health.
+        new_df = new_df.with_columns(
+            (pl.col("health") - pl.col("health_cost"))
+            .alias("health")
+        )
+
+        return new_df
+
+    def _process_gestation(
+            self,
+            old_df: DataFrame
+    ) -> DataFrame:
+        cfg: ConfigAgentManager = self.config_agent_manager
+
+        # 1. Updates the gestation timer..
+        new_df = old_df.with_columns(
+            pl.when(pl.col("is_pregnant"))
+            .then(pl.col("gestation_timer") + 1)
+            .otherwise(pl.col("gestation_timer"))
+        )
+
+        # 2. If the gestation time is met, gives birth.
+        new_df = new_df.with_columns(
+            pl.when((pl.col("gestation_timer")) == (cfg.GESTATION_TIME))
+            .then() #TODO Add birth logic.
+        )
+
+        return new_df
+
+    def _process_waste_accumulation(
+            self,
+            old_df: DataFrame
+    ) -> DataFrame:
+        # 1. Handles the waste.
+        df = old_df.with_columns(
+            #TODO Identify the agents that need to drop waste, drop the waste and reset the waste accumulated.
+        )
 
     def _move_agents(
             self,
@@ -485,8 +571,7 @@ class AgentManager:
 
         # Deletes the old positions.
         self.agent_matrix[old_pos_y, old_pos_x] = self.config_agent_manager.EMPTY_MATRIX_ID
-        self.agent_color_matrix[old_pos_y, old_pos_x, :] = self.config_agent_manager.EMPTY_MATRIX_ID
-
+        
         # Updates the new columns.
         new_df = new_df.with_columns(
             pl.when(pl.col("valid_move"))
@@ -514,17 +599,17 @@ class AgentManager:
 
         # Updates the matrices.
         self.agent_matrix[collision_updated_y_pos, collision_updated_x_pos] = self.config_agent_manager.AGENT_MATRIX_ID
-        self.agent_color_matrix[collision_updated_y_pos, collision_updated_x_pos, :] = np.stack([color_r, color_g, color_b], axis=1) # (1000, 3).
 
         return (valid_move, new_df)
-
-    def update_agents(
+    
+    def agent_loop(
             self,
             map_temperature: int
     ) -> None:
         df: DataFrame = self.agents_df
         cfg: ConfigAgentManager = self.config_agent_manager
 
+        # A. MANDATORY ACTIONS.
         # 1. Cheks whether the agent dies.
         df = df.filter((pl.col("energy") > 0) & (pl.col("health") > 0))
 
@@ -543,77 +628,31 @@ class AgentManager:
         )
 
         # 4. Processes the metabolism.
-        # Calculates the metabolism modifier.
-        df = df.with_columns(
-            (
-                pl.lit(1.0) # Starts with a base metabolism multiplier of 1.0.
-                * pl.when(pl.col("is_infected"))
-                .then(cfg.METABOLISM_INFECTED_MULT)
-                .otherwise(1.0)
-                * pl.when(pl.col("is_bleeding"))
-                .then(cfg.METABOLISM_BLEEDING_MULT)
-                .otherwise(1.0)
-                * pl.when(pl.col("is_sleeping"))
-                .then(cfg.METABOLISM_SLEEPING_MULT)
-                .otherwise(1.0)
-                * pl.when(pl.col("is_pregnant"))
-                .then(cfg.METABOLISM_PREGNANT_MULT)
-                .otherwise(1.0)
-                * pl.when(pl.col("is_hibernating"))
-                .then(cfg.METABOLISM_HIBERNATING_MULT)
-                .otherwise(1.0)
-            )
-            .alias("metabolism_modifier")
-        )
-
-        # Calculates the total burn rate depending on base burn rate, metabolism modifier, size and temperature.
-        df = df.with_columns(
-            (pl.col("base_energy_burn_rate") * pl.col("metabolism_modifier") * pl.col("size")) + ((map_temperature - pl.col("optimal_temperature").abs()) * cfg.METABOLISM_TEMP_HARSHNESS * (pl.lit(1.0) - pl.col("effective_resistance")))
-            .alias("total_energy_burn_rate")
-        )
-
-        # Deducts the calculated total burn rate from current energy.
-        df = df.with_columns(
-            (pl.col("energy") - pl.col("total_energy_burn_rate"))
-            .alias("energy")
+        df = self._process_metabolism(
+            old_df = df,
+            map_temperature = map_temperature
         )
 
         # 5. Handles the disease, bleeding, gestation and waste accumulation states.
-        # Calculates the health cost.
-        df = df.with_columns(
-            (
-                pl.lit(0) # Starts with base health cost of 0.
-                + pl.when(pl.col("is_infected"))
-                .then(cfg.DISEASE_HEALTH_COST)
-                .otherwise(0)
-                + pl.when(pl.col("is_bleeding"))
-                .then(cfg.BLEEDING_HEALTH_COST)
-                .otherwise(0)
-            )
-            .alias("health_cost")
+        # 5. Handles the vital states such as infected or bleeding.
+        df = self._process_vital_states(old_df=df)
+
+        # 6. Handles the gestation.
+        df = self._process_gestation(old_df=df)
+
+        # 7. Handles the waste accumulation.
+        df = self._process_waste_accumulation(old_df=df)
+
+        self.agents_df = df
+
+        # B. TAKEN ACTIONS.
+        # 1. Moves the agents.
+        #! TESTING
+        direction_index: int = np.random.randint(0, 4)
+        valid_move, df = self._move_agents(
+            old_df = df,
+            direction_index = direction_index
         )
 
-        # Deducts the health cost from the current health.
-        df = df.with_columns(
-            (pl.col("health") - pl.col("health_cost"))
-            .alias("health")
-        )
-
-        # Updates the gestation timer and give birth logic.
-        df = df.with_columns(
-            pl.when(pl.col("is_pregnant"))
-            .then(pl.col("gestation_timer") + 1)
-            .otherwise(pl.col("gestation_timer"))
-        )
-
-        df = df.with_columns(
-            pl.when((pl.col("gestation_timer")) == (cfg.GESTATION_TIME))
-            .then() #TODO Add birth logic.
-        )
-
-        # Handles the waste.
-        df = df.with_columns(
-            #TODO Identify the agents that need to drop waste, drop the waste and reset the waste accumulated.
-        )
-
-        # 6. Moves the agents.
+    def get_agent_state(self) -> DataFrame:
+        return self.agents_df
