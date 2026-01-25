@@ -246,19 +246,19 @@ class Visualizer: #TODO AD
             agents_df: DataFrame
     ) -> None:
         # 1. Resets the matrix to ID 0 (Empty).
-        self.agent_matrix.fill(self.ID_EMPTY)
-        self.agent_color_matrix.fill(self.ID_EMPTY)
+        self.agent_matrix.fill(0)
+        self.agent_color_matrix.fill(0)
 
-        # 2. Extracts the positions of agents as array from the dataframe.
-        x_pos: NDArray = agents_df["x_pos"].to_numpy(dtype=np.int16)
-        y_pos: NDArray = agents_df["y_pos"].to_numpy(dtype=np.int16)
+        # 2. Extracts the positions of agents as array from the dataframe and converts them into necessary data types.
+        x_pos: NDArray = agents_df["x_pos"].to_numpy().astype(dtype=np.int16) # Polar columns has to be first extracted and then converted.
+        y_pos: NDArray = agents_df["y_pos"].to_numpy().astype(dtype=np.int16)
 
         # 3. Stacks the colors into array (N, 3).
         colors: NDArray = np.column_stack(
             (
-                agents_df["color_r"].to_numpy(dtype=np.int16),
-                agents_df["color_g"].to_numpy(dtype=np.int16),
-                agents_df["color_b"].to_numpy(dtype=np.int16)
+                agents_df["color_r"].to_numpy().astype(dtype=np.uint8),
+                agents_df["color_g"].to_numpy().astype(dtype=np.uint8),
+                agents_df["color_b"].to_numpy().astype(dtype=np.uint8)
             )
         )
 
