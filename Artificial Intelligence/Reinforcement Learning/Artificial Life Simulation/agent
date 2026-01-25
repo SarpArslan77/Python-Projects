@@ -244,69 +244,72 @@ class AgentManager:
         self.agents_df: DataFrame = self._create_empty_agent_df()
 
     def _create_empty_agent_df(self) -> DataFrame:   
-        agent_df_schema: dict = {
-            #TODO WOO
-            # Identity Genetics.
-            "sex": pl.UInt8, 
-            "clan_id": pl.UInt8,
+            agent_df_schema: dict = {
+                # Identity.
+                "clan_id": pl.UInt8,
+                "sex": pl.UInt8,
+                
+                # Physical Genetics.
+                "size": pl.UInt8,
+                "max_age": pl.UInt8,
+                "max_health": pl.UInt8,
+                "max_energy": pl.UInt8,
+                "optimal_temperature": pl.UInt8,
+                "resistance": pl.Float32, # Base genetic resistance.
+                
+                # Metabolic Genetics.
+                "base_energy_burn_rate": pl.Float32, # Use instead of Float16.
+                "chronotype": pl.Float32,
+                "plant_digestion_efficiency": pl.Float32,
+                "meat_digestion_efficiency": pl.Float32,
 
-            # Physical Genetics.
-            "size": pl.UInt8,
-            "max_age": pl.UInt8,
-            "max_health": pl.UInt8,
-            "max_energy": pl.UInt8,
-            "optimal_temperature": pl.UInt8,
-            "base_energy_burn_rate": pl.Float32, # Use instead of Float16, since it is not natively supported by many CPUs.
-            "total_energy_burn_rate": pl.Float32,
-            "resistance": pl.Float32,
+                # Special Traits.
+                "has_venom": pl.Boolean, 
+                "has_mimicry": pl.Boolean,
 
-            # Survival Genetics.
-            "chronotype": pl.Float32,
-            "plant_digestion_efficiency": pl.Float32,
-            "meat_digestion_efficiency": pl.Float32,
-            "has_venom": pl.Boolean, 
-            "has_mimicry": pl.Boolean,
+                # Behavioral Genetics.
+                "kinship_loyalty": pl.Float32,
+                "parental_instinct": pl.Float32,
+                "hostility": pl.Float32,
+                "fight_flight_bias": pl.Float32,
 
-            # Behavioral Genetics.
-            "kinship_loyalty": pl.Float32,
-            "parental_instinct": pl.Float32,
-            "hostility": pl.Float32,
-            "fight_flight_bias":pl.Float32,
+                # Current Vitals.
+                "age": pl.UInt8,
+                "health": pl.Float32,
+                "energy": pl.Float32,
+                "waste_accumulated": pl.UInt8,
 
-            # Metabolic States.
-            "is_infected": pl.Boolean,
-            "is_bleeding": pl.Boolean,
-            "is_sleeping": pl.Boolean,
-            "is_pregnant": pl.Boolean,
-            "is_hibernating": pl.Boolean,
-            "metabolism_modifier": pl.Float32,
-            "health_cost": pl.UInt8,
+                # Calculated Rates & Modifiers.
+                "total_energy_burn_rate": pl.Float32,
+                "effective_resistance": pl.Float32, # Base resistance +/- modifiers.
+                "metabolism_modifier": pl.Float32,
+                "health_cost": pl.Float32,
 
-            # Timers & Counters.
-            "hibernation_timer":pl.UInt8,
-            "gestation_timer": pl.UInt8,
-            "waste_accumulated": pl.UInt8,
+                # Boolean Status Flags.
+                "is_infected": pl.Boolean,
+                "is_bleeding": pl.Boolean,
+                "is_sleeping": pl.Boolean,
+                "is_pregnant": pl.Boolean,
+                "is_hibernating": pl.Boolean,
 
-            # Positional States.
-            "x_pos": pl.UInt8,
-            "y_pos": pl.UInt8,
-            "new_x_pos": pl.Int8,
-            "new_y_pos": pl.Int8,
-            "valid_move": pl.Boolean,
+                # Timers.
+                "hibernation_timer": pl.UInt8,
+                "gestation_timer": pl.UInt8,
 
-            # Vital States.
-            "age": pl.UInt8,
-            "health": pl.Float32,
-            "energy": pl.Float32,
-            "effective_resistance": pl.Float32,
+                # Positional States.
+                "x_pos": pl.Int16,
+                "y_pos": pl.Int16,
+                "new_x_pos": pl.Int16,
+                "new_y_pos": pl.Int16,
+                "valid_move": pl.Boolean,
 
-            # Derived States.
-            "color_r": pl.UInt8,
-            "color_g": pl.UInt8,
-            "color_b": pl.UInt8,
-        }
+                # Visual Genetics/State.
+                "color_r": pl.UInt8,
+                "color_g": pl.UInt8,
+                "color_b": pl.UInt8,
+            }
 
-        return pl.DataFrame(schema=agent_df_schema) # Creates a DataFrame from the schema dictionary.
+            return pl.DataFrame(schema=agent_df_schema) # Creates a dataframe from the schema dictionary.
 
     def create_agents(
             self,
@@ -318,49 +321,55 @@ class AgentManager:
 
         # 2. Generates all random data in a single dictionary definition.
         agent_data: dict[str, NDArray] = {
-            #TODO WOO
-            # Identity Genetics.
-            "sex": rng.integers(low=0, high=2 + 1, size=count), #TODO ACV
-            "clan_id": rng.integers(low=0, high=0 + 1, size=count), #TODO Add Clan ID mechanism.
+            # Identity.
+            "clan_id": rng.integers(low=0, high=0 + 1, size=count, dtype=np.uint8), #TODO Add Clan ID mechanism.
+            "sex": rng.integers(low=0, high=2 + 1, size=count, dtype=np.uint8), #TODO ACV
 
             # Physical Genetics.
-            "size": rng.integers(low=self.config_agent_manager.MIN_SIZE, high=self.config_agent_manager.MAX_SIZE + 1, size=count),
-            "max_age": rng.integers(low=self.config_agent_manager.MIN_AGE, high=self.config_agent_manager.MAX_AGE + 1, size=count),
-            "max_health": rng.integers(low=self.config_agent_manager.MIN_HEALTH, high=self.config_agent_manager.MAX_HEALTH + 1, size=count),
-            "max_energy": rng.integers(low=self.config_agent_manager.MIN_ENERGY, high=self.config_agent_manager.MAX_ENERGY + 1, size=count),
-            "optimal_temperature": rng.integers(low=self.config_agent_manager.MIN_TEMP, high=self.config_agent_manager.MAX_TEMP + 1, size=count),
-            "base_energy_burn_rate": rng.uniform(low=self.config_agent_manager.MIN_ENERGY_BURN, high=self.config_agent_manager.MAX_ENERGY_BURN + 1, size=count),
-            "resistance": rng.uniform(low=self.config_agent_manager.MIN_RESISTANCE, high=self.config_agent_manager.MAX_RESISTANCE, size=count),
+            "size": rng.integers(low=self.config_agent_manager.MIN_SIZE, high=self.config_agent_manager.MAX_SIZE + 1, size=count, dtype=np.uint8),
+            "max_age": rng.integers(low=self.config_agent_manager.MIN_AGE, high=self.config_agent_manager.MAX_AGE + 1, size=count, dtype=np.uint8),
+            "max_health": rng.integers(low=self.config_agent_manager.MIN_HEALTH, high=self.config_agent_manager.MAX_HEALTH + 1, size=count, dtype=np.uint8),
+            "max_energy": rng.integers(low=self.config_agent_manager.MIN_ENERGY, high=self.config_agent_manager.MAX_ENERGY + 1, size=count, dtype=np.uint8),
+            "optimal_temperature": rng.integers(low=self.config_agent_manager.MIN_TEMP, high=self.config_agent_manager.MAX_TEMP + 1, size=count, dtype=np.uint8),
+            "resistance": rng.uniform(low=self.config_agent_manager.MIN_RESISTANCE, high=self.config_agent_manager.MAX_RESISTANCE, size=count).astype(np.float32),
 
-            # Survival Genetics.
-            "chronotype": rng.uniform(low=self.config_agent_manager.MIN_CHRONOTYPE, high=self.config_agent_manager.MAX_CHRONOTYPE, size=count),
-            "plant_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_PLANT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST, size=count),
-            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_MEAT_DIGEST, size=count),
-            "has_venom": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.VENOM_CHANCE, # Creates a boolean array according to the condition.
-            "has_mimicry": rng.uniform(low=0, high=1, size=count) < self.config_agent_manager.MIMICRY_CHANCE,
+            # Metabolic Genetics.
+            "base_energy_burn_rate": rng.uniform(low=self.config_agent_manager.MIN_ENERGY_BURN, high=self.config_agent_manager.MAX_ENERGY_BURN + 1, size=count).astype(np.float32),
+            "chronotype": rng.uniform(low=self.config_agent_manager.MIN_CHRONOTYPE, high=self.config_agent_manager.MAX_CHRONOTYPE, size=count).astype(np.float32),
+            "plant_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_PLANT_DIGEST, high=self.config_agent_manager.MAX_PLANT_DIGEST, size=count).astype(np.float32),
+            "meat_digestion_efficiency": rng.uniform(low=self.config_agent_manager.MIN_MEAT_DIGEST, high=self.config_agent_manager.MAX_MEAT_DIGEST, size=count).astype(np.float32),
+
+            # Special Traits.
+            "has_venom": rng.uniform(low=0, high=1, size=count).astype(np.float32) < self.config_agent_manager.VENOM_CHANCE, # Creates a boolean array according to the condition. #TODO Check whether the dtype matches.
+            "has_mimicry": rng.uniform(low=0, high=1, size=count).astype(np.float32) < self.config_agent_manager.MIMICRY_CHANCE,
 
             # Behavioral Genetics.
-            "kinship_loyalty": rng.uniform(low=self.config_agent_manager.MIN_KINSHIP, high=self.config_agent_manager.MAX_KINSHIP, size=count),
-            "parental_instinct": rng.uniform(low=self.config_agent_manager.MIN_PARENTAL, high=self.config_agent_manager.MAX_PARENTAL, size=count),
-            "hostility": rng.uniform(low=self.config_agent_manager.MIN_HOSTILITY, high=self.config_agent_manager.MAX_HOSTILITY, size=count),
-            "fight_flight_bias": rng.uniform(low=self.config_agent_manager.MIN_FIGHT_FLIGHT, high=self.config_agent_manager.MAX_FIGHT_FLIGHT, size=count),
+            "kinship_loyalty": rng.uniform(low=self.config_agent_manager.MIN_KINSHIP, high=self.config_agent_manager.MAX_KINSHIP, size=count).astype(np.float32),
+            "parental_instinct": rng.uniform(low=self.config_agent_manager.MIN_PARENTAL, high=self.config_agent_manager.MAX_PARENTAL, size=count).astype(np.float32),
+            "hostility": rng.uniform(low=self.config_agent_manager.MIN_HOSTILITY, high=self.config_agent_manager.MAX_HOSTILITY, size=count).astype(np.float32),
+            "fight_flight_bias": rng.uniform(low=self.config_agent_manager.MIN_FIGHT_FLIGHT, high=self.config_agent_manager.MAX_FIGHT_FLIGHT, size=count).astype(np.float32),
 
-            # Metabolic States.
+            # Current Vitals.
             "age": np.zeros(shape=count, dtype=np.uint8),
-            "is_infected": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
-            "is_bleeding": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
-            "is_sleeping": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
-            "is_pregnant": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
-            "is_hibernating": np.full(shape=count, fill_value=False, dtype=pl.Boolean),
-            "metabolism_modifier": np.ones(shape=count, dtype=pl.Float32),
-            "health_cost": np.ones(shape=count, dtype=pl.Float32),
+            "waste_accumulated": np.zeros(shape=count, dtype=np.uint8),
+            
+            # Calculated Rates & Modifiers.
+            "metabolism_modifier": np.ones(shape=count, dtype=np.float32),
+            "health_cost": np.ones(shape=count, dtype=np.float32),
 
-            # Timers & Counters.
-            "hibernation_timer": np.zeros(shape=count, dtype=pl.UInt8),
-            "gestation_timer": np.zeros(shape=count, dtype=pl.UInt8),
-            "waste_accumulated": np.zeros(shape=count, dtype=pl.UInt8),
+            # Boolean Status Flags.
+            "is_infected": np.full(shape=count, fill_value=False, dtype=np.bool_),
+            "is_bleeding": np.full(shape=count, fill_value=False, dtype=np.bool_),
+            "is_sleeping": np.full(shape=count, fill_value=False, dtype=np.bool_),
+            "is_pregnant": np.full(shape=count, fill_value=False, dtype=np.bool_),
+            "is_hibernating": np.full(shape=count, fill_value=False, dtype=np.bool_),
 
-            "valid_move": np.full(shape=count, fill_value=False, dtype=pl.Boolean)
+            # Timers.
+            "hibernation_timer": np.zeros(shape=count, dtype=np.uint8),
+            "gestation_timer": np.zeros(shape=count, dtype=np.uint8),
+
+            # Positional States.
+            "valid_move": np.full(shape=count, fill_value=False, dtype=np.bool_)
         }
 
         # 3. Creates the DataFrame.
@@ -368,8 +377,8 @@ class AgentManager:
 
         # 4. Creates columns for the attributes, that have starting values.
         new_agents_df = new_agents_df.with_columns(
-            (pl.col("max_health").cast(pl.UInt8).alias("health")), # Gets the reference to the column.
-            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).cast(pl.UInt8).alias("energy"),  # Name of the added attribute.
+            (pl.col("max_health").cast(pl.Float32).alias("health")), # Gets the reference to the column.
+            (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).cast(pl.Float32).alias("energy"),  # Name of the added attribute.
             (pl.col("resistance").cast(pl.Float32).alias("effective_resistance")),
             (pl.col("base_energy_burn_rate").cast(pl.Float32).alias("total_energy_burn_rate"))
         )
@@ -407,13 +416,17 @@ class AgentManager:
 
         # Adds position columns to the DataFrame.
         new_agents_df = new_agents_df.with_columns(
-            pl.lit(random_indices_flat % self.simulation_size).cast(pl.UInt8).alias("x_pos"), # 'lit' converts an array into polars column.
-            pl.lit(random_indices_flat // self.simulation_size).cast(pl.UInt8).alias("y_pos"),
-            pl.lit(random_indices_flat % self.simulation_size).cast(pl.UInt8).alias("new_x_pos"),
-            pl.lit(random_indices_flat // self.simulation_size).cast(pl.UInt8).alias("new_y_pos")
+            pl.lit(random_indices_flat % self.simulation_size).cast(pl.Int16).alias("x_pos"), # 'lit' converts an array into polars column.
+            pl.lit(random_indices_flat // self.simulation_size).cast(pl.Int16).alias("y_pos"),
+            pl.lit(random_indices_flat % self.simulation_size).cast(pl.Int16).alias("new_x_pos"),
+            pl.lit(random_indices_flat // self.simulation_size).cast(pl.Int16).alias("new_y_pos")
         )
 
         # 7. Updates the agent DataFrame.
+        # Forces the new data frame to have the same column order as the schema.
+        new_agents_df = new_agents_df.select(self.agents_df.columns)
+
+        # Concates them together.
         self.agents_df = pl.concat([self.agents_df, new_agents_df])
 
     def _process_metabolism(
@@ -501,11 +514,13 @@ class AgentManager:
             .otherwise(pl.col("gestation_timer"))
         )
 
+        """
         # 2. If the gestation time is met, gives birth.
         new_df = new_df.with_columns(
             pl.when((pl.col("gestation_timer")) == (cfg.GESTATION_TIME))
             .then() #TODO Add birth logic.
         )
+        """
 
         return new_df
 
@@ -514,9 +529,13 @@ class AgentManager:
             old_df: DataFrame
     ) -> DataFrame:
         # 1. Handles the waste.
+        """
         df = old_df.with_columns(
             #TODO Identify the agents that need to drop waste, drop the waste and reset the waste accumulated.
         )
+        """
+
+        return old_df #! Correct it, when the method is written.
 
     def _move_agents(
             self,
@@ -543,8 +562,8 @@ class AgentManager:
 
         # 3. Checks for colision.
         # Extract the polars columns as numpy arrays.
-        potential_y: NDArray = new_df["new_y_pos"].to_numpy(dtype=np.int16) # For safe map size.
-        potential_x: NDArray = new_df["new_x_pos"].to_numpy(dtype=np.int16) 
+        potential_y: NDArray = new_df["new_y_pos"].to_numpy().astype(dtype=np.int16) # For safe map size.
+        potential_x: NDArray = new_df["new_x_pos"].to_numpy().astype(dtype=np.int16)
 
         # Clips the coordinates to safe range (0 to size-1).
         safe_y: NDArray = np.clip(potential_y, 0, self.simulation_size - 1)
@@ -560,14 +579,10 @@ class AgentManager:
 
         # 5. Deletes the old position and updates the new.
         # Extract the polar columns as numpy arrays.
-        old_pos_y: NDArray = new_df["y_pos"].to_numpy(dtype=np.uint8)
-        old_pos_x: NDArray = new_df["x_pos"].to_numpy(dtype=np.uint8)
+        old_pos_y: NDArray = new_df["y_pos"].to_numpy().astype(dtype=np.int16)
+        old_pos_x: NDArray = new_df["x_pos"].to_numpy().astype(dtype=np.int16)
 
-        color_r: NDArray = new_df["color_r"].to_numpy(dtype=np.uint8)
-        color_g: NDArray = new_df["color_g"].to_numpy(dtype=np.uint8)
-        color_b: NDArray = new_df["color_b"].to_numpy(dtype=np.uint8)
-
-        valid_move: NDArray = new_df["valid_move"].to_numpy(dtype=np.bool_)
+        valid_move: NDArray = new_df["valid_move"].to_numpy().astype(dtype=np.bool_)
 
         # Deletes the old positions.
         self.agent_matrix[old_pos_y, old_pos_x] = self.config_agent_manager.EMPTY_MATRIX_ID
@@ -594,8 +609,8 @@ class AgentManager:
         )
 
         # Extracts the newly updated y- and x-positions.
-        collision_updated_y_pos: NDArray = new_df["y_pos"].to_numpy(dtype=np.uint8)
-        collision_updated_x_pos: NDArray = new_df["x_pos"].to_numpy(dtype=np.uint8)
+        collision_updated_y_pos: NDArray = new_df["y_pos"].to_numpy().astype(dtype=np.int16)
+        collision_updated_x_pos: NDArray = new_df["x_pos"].to_numpy().astype(dtype=np.int16)
 
         # Updates the matrices.
         self.agent_matrix[collision_updated_y_pos, collision_updated_x_pos] = self.config_agent_manager.AGENT_MATRIX_ID
@@ -611,7 +626,7 @@ class AgentManager:
 
         # A. MANDATORY ACTIONS.
         # 1. Cheks whether the agent dies.
-        df = df.filter((pl.col("energy") > 0) & (pl.col("health") > 0))
+        #! df = df.filter((pl.col("energy") > 0) & (pl.col("health") > 0))
 
         # 2. Updates the agents age.
         df = df.with_columns(
@@ -653,6 +668,8 @@ class AgentManager:
             old_df = df,
             direction_index = direction_index
         )
+
+        self.agents_df = df
 
     def get_agent_state(self) -> DataFrame:
         return self.agents_df
