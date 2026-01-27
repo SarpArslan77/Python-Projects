@@ -31,6 +31,7 @@ class ConfigVisualizer: #TODO AD
     window_size: int
     BLUR_STRENGTH: int = 6 # Standard Deviation of the Gaussian bell curve.
     TERRAIN_THRESHOLDS: tuple[int] = (20, 70, 95)
+    FPS: int = 60
 
     # Validates the inputs.
     def __post_init__(self) -> None:
@@ -307,6 +308,7 @@ class Visualizer: #TODO AD
         )
 
         # 7. Updates the screen.
+        self.clock.tick(self.config.FPS)
         pygame.display.update()
 
         return True
