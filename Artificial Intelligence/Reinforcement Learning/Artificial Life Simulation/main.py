@@ -52,6 +52,7 @@ if __name__ == "__main__":
     config_agent_manager = ConfigAgentManager()
     agent_manager = AgentManager(
         config_agent_manager = config_agent_manager,
+        resource_manager = resource_manager,
         simulation_size = SIMULATION_SIZE
     )
 
@@ -66,7 +67,7 @@ if __name__ == "__main__":
     )
 
     # 5. Creates the starting generation for the simulation.
-    agent_manager.create_agents(count=10)
+    agent_manager.create_agents(count=100)
 
     running: bool = True
     while running:
