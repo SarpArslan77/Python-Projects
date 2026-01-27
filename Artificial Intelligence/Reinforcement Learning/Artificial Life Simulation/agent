@@ -13,21 +13,20 @@
 
 #! PW: Possibly wrong.
 
-from typing import Tuple
+from dataclasses import (
+    dataclass,
+    field
+)
 
 import numpy as np
+from numpy.typing import NDArray
 import polars as pl
 from polars import DataFrame
 
-from dataclasses import dataclass
-from numpy.typing import NDArray
+from simulation_resources import ResourceManager
 
-from dataclasses import dataclass
-from typing import Tuple
 
 # Type alias for clarity
-MoveDirection = Tuple[int, int]
-
 @dataclass(frozen=True)
 class ConfigAgentManager:
     """
@@ -39,8 +38,11 @@ class ConfigAgentManager:
     EMPTY_MATRIX_ID: int = 0
     AGENT_MATRIX_ID: int = 1
     # Order: Up, Right, Down, Left
-    MOVEMENT_DIRECTIONS: Tuple[MoveDirection, MoveDirection, MoveDirection, MoveDirection] = (
-        (0, -1), (1, 0), (0, 1), (-1, 0)
+    MOVEMENT_DIRECTIONS: NDArray = field( # Allows to create mutable variables in the dataclass.
+        default_factory=lambda: np.array(
+            ((0, -1), (1, 0), (0, 1), (-1, 0)),
+            dtype = np.int8
+        )
     )
 
     # 2. PHYSICAL GENETICS
@@ -97,7 +99,8 @@ class ConfigAgentManager:
 
     # 7. TIMERS & CAPACITIES
     GESTATION_TIME: int = 250
-    MAX_WASTE_CAPACITY: int = 100
+    MAX_WASTE_CAPACITY: int = 10
+    WASTE_PORTION: float = 0.25
 
     def __post_init__(self) -> None:
         """
@@ -108,17 +111,15 @@ class ConfigAgentManager:
         # 1. SIMULATION & MATRIX CONSTANTS Validation 
         if not isinstance(self.EMPTY_MATRIX_ID, int) or not isinstance(self.AGENT_MATRIX_ID, int):
             raise TypeError("Matrix IDs must be integers.")
-        
         if self.EMPTY_MATRIX_ID == self.AGENT_MATRIX_ID:
             raise ValueError(f"EMPTY_MATRIX_ID and AGENT_MATRIX_ID cannot be the same ({self.EMPTY_MATRIX_ID}).")
 
-        if not isinstance(self.MOVEMENT_DIRECTIONS, tuple):
-            raise TypeError("MOVEMENT_DIRECTIONS must be a tuple.")
-        if len(self.MOVEMENT_DIRECTIONS) != 4:
-            raise ValueError(f"MOVEMENT_DIRECTIONS must have 4 elements, got {len(self.MOVEMENT_DIRECTIONS)}.")
-        for d in self.MOVEMENT_DIRECTIONS:
-            if not isinstance(d, tuple) or len(d) != 2 or not all(isinstance(x, int) for x in d):
-                raise TypeError("Each movement direction must be a tuple of 2 integers (dx, dy).")
+        if not isinstance(self.MOVEMENT_DIRECTIONS, np.ndarray): # Uses instead of 'NDArray', so it works with 'isinstance' method.
+            raise TypeError("MOVEMENT_DIRECTIONS must be a NumPy ndarray.")
+        if self.MOVEMENT_DIRECTIONS.shape != (4, 2):
+            raise ValueError(f"MOVEMENT_DIRECTIONS must have a shape of (4, 2), but got {self.MOVEMENT_DIRECTIONS.shape}.")
+        if not np.issubdtype(self.MOVEMENT_DIRECTIONS.dtype, np.integer):
+            raise TypeError(f"MOVEMENT_DIRECTIONS elements must be integers, but got dtype {self.MOVEMENT_DIRECTIONS.dtype}.")
 
         # 2. PHYSICAL GENETICS Validation 
         int_phys_ranges = [
@@ -228,10 +229,12 @@ class AgentManager:
     def __init__(
             self,
             config_agent_manager: ConfigAgentManager,
+            resource_manager: ResourceManager,
             simulation_size: int
     ) -> None:
         # 1. Defines input parameters.
         self.config_agent_manager: ConfigAgentManager = config_agent_manager
+        self.resource_manager: ResourceManager = resource_manager
         self.simulation_size: int = simulation_size
 
         # 2. Creates agent matrix.
@@ -277,9 +280,9 @@ class AgentManager:
                 "age": pl.UInt8,
                 "health": pl.Float32,
                 "energy": pl.Float32,
-                "waste_accumulated": pl.UInt8,
+                "waste_accumulated": pl.Float32,
 
-                # Calculated Rates & Modifiers.
+                # Calculated Rates & Modifiers. #TODO Delete these columns from the dataframe.
                 "total_energy_burn_rate": pl.Float32,
                 "effective_resistance": pl.Float32, # Base resistance +/- modifiers.
                 "metabolism_modifier": pl.Float32,
@@ -299,7 +302,7 @@ class AgentManager:
                 # Positional States.
                 "x_pos": pl.Int16,
                 "y_pos": pl.Int16,
-                "new_x_pos": pl.Int16,
+                "new_x_pos": pl.Int16, #TODO Delete these columns from the dataframe
                 "new_y_pos": pl.Int16,
                 "valid_move": pl.Boolean,
 
@@ -351,8 +354,8 @@ class AgentManager:
 
             # Current Vitals.
             "age": np.zeros(shape=count, dtype=np.uint8),
-            "waste_accumulated": np.zeros(shape=count, dtype=np.uint8),
-            
+            "waste_accumulated": np.zeros(shape=count, dtype=np.float32),
+
             # Calculated Rates & Modifiers.
             "metabolism_modifier": np.ones(shape=count, dtype=np.float32),
             "health_cost": np.ones(shape=count, dtype=np.float32),
@@ -429,6 +432,31 @@ class AgentManager:
         # Concates them together.
         self.agents_df = pl.concat([self.agents_df, new_agents_df])
 
+    def _process_death(
+            self,
+            old_df: DataFrame
+    ) -> DataFrame:
+        cfg: ConfigAgentManager = self.config_agent_manager
+
+        # 1. Extracts the agents, that needs to die.
+        death_mask: DataFrame = (pl.col("energy") <= 0) | (pl.col("health") <= 0)
+
+        dead_agents: DataFrame = old_df.filter(death_mask)
+
+        # Extracts the positions.
+        new_corpse_x_positions: NDArray = dead_agents["x_pos"].to_numpy().astype(dtype=np.int16)
+        new_corpse_y_positions: NDArray = dead_agents["y_pos"].to_numpy().astype(dtype=np.int16)
+
+        # 2. Updates the corpse matrix with the new corpses.
+        self.resource_manager.corpse_matrix[new_corpse_y_positions, new_corpse_x_positions] += 1.0
+
+        # 3. Deletes the agents that died from the dataframe and agent matrix.
+        new_df: DataFrame = old_df.filter(~death_mask) # '~' inverts the variable.
+
+        self.agent_matrix[new_corpse_y_positions, new_corpse_x_positions] = cfg.EMPTY_MATRIX_ID
+
+        return new_df
+
     def _process_metabolism(
             self,
             old_df: DataFrame,
@@ -459,16 +487,21 @@ class AgentManager:
             .alias("metabolism_modifier")
         )
 
-        # 2. Calculates the total burn rate depending on base burn rate, metabolism modifier, size and temperature.
+        # 2. Calculates the total burn rate depending on base burn rate, metabolism modifier, size and temperature and deducts it from the current energy.
         new_df = new_df.with_columns(
             (pl.col("base_energy_burn_rate") * pl.col("metabolism_modifier") * pl.col("size")) + ((map_temperature - pl.col("optimal_temperature").abs()) * cfg.METABOLISM_TEMP_HARSHNESS * (pl.lit(1.0) - pl.col("effective_resistance")))
             .alias("total_energy_burn_rate")
         )
 
-        # 3. Deducts the calculated total burn rate from current energy.
         new_df = new_df.with_columns(
             (pl.col("energy") - pl.col("total_energy_burn_rate"))
             .alias("energy")
+        )
+
+        # 3. Adds a portion of total energy burn rate to the waste accumulation.
+        new_df = new_df.with_columns(
+            (pl.col("waste_accumulated") + pl.col("total_energy_burn_rate") * cfg.WASTE_PORTION)
+            .alias("waste_accumulated")
         )
 
         return new_df
@@ -526,24 +559,45 @@ class AgentManager:
 
     def _process_waste_accumulation(
             self,
-            old_df: DataFrame
+            old_df: DataFrame,
     ) -> DataFrame:
-        # 1. Handles the waste.
-        """
-        df = old_df.with_columns(
-            #TODO Identify the agents that need to drop waste, drop the waste and reset the waste accumulated.
-        )
-        """
+        cfg: ConfigAgentManager = self.config_agent_manager
 
-        return old_df #! Correct it, when the method is written.
+        # 1. Extracts the agents, that need to remove their wastes.
+        waste_full_agents: DataFrame = old_df.filter(pl.col("waste_accumulated") >= cfg.MAX_WASTE_CAPACITY)
+ 
+        # Extracts the positions.
+        new_waste_x_positions: NDArray = waste_full_agents["x_pos"].to_numpy().astype(dtype=np.int16)
+        new_waste_y_positions: NDArray = waste_full_agents["y_pos"].to_numpy().astype(dtype=np.int16)
+
+        # 2. Updates the waste matrix with the new wastes.
+        self.resource_manager.waste_matrix[new_waste_y_positions, new_waste_x_positions] += 1.0
+
+        # 3. Updates the dataframe column waste accumulated.
+        new_df: DataFrame = old_df.with_columns(
+            (
+                pl.when(pl.col("waste_accumulated") >= cfg.MAX_WASTE_CAPACITY)
+                .then(0.0)
+                .otherwise(pl.col("waste_accumulated"))
+            )
+            .cast(pl.Float32)
+            .alias("waste_accumulated")
+        )
+
+        return new_df
+
 
     def _move_agents(
             self,
             old_df: DataFrame,
-            direction_index: int # (0: Up, 1: Right, 2: Down, 3: Left).
+            direction_indices: int # (0: Up, 1: Right, 2: Down, 3: Left).
     ) -> tuple[NDArray, DataFrame]:
         # 1. Calculates the target based on the direction.
-        dx, dy = self.config_agent_manager.MOVEMENT_DIRECTIONS[direction_index]
+        directions = self.config_agent_manager.MOVEMENT_DIRECTIONS[direction_indices]
+
+        # Seperates the dx and dy vectors.
+        dx: NDArray = directions[:, 0]
+        dy: NDArray = directions[:, 1]
 
         new_df: DataFrame = old_df.with_columns(
             (pl.col("x_pos") + dx).alias("new_x_pos"),
@@ -619,14 +673,14 @@ class AgentManager:
     
     def agent_loop(
             self,
-            map_temperature: int
+            map_temperature: int,
     ) -> None:
         df: DataFrame = self.agents_df
         cfg: ConfigAgentManager = self.config_agent_manager
 
         # A. MANDATORY ACTIONS.
         # 1. Cheks whether the agent dies.
-        #! df = df.filter((pl.col("energy") > 0) & (pl.col("health") > 0))
+        df = self._process_death(old_df=df)
 
         # 2. Updates the agents age.
         df = df.with_columns(
@@ -658,15 +712,17 @@ class AgentManager:
         # 7. Handles the waste accumulation.
         df = self._process_waste_accumulation(old_df=df)
 
+        # 8. Updates the agents dataframe.
         self.agents_df = df
 
         # B. TAKEN ACTIONS.
         # 1. Moves the agents.
         #! TESTING
-        direction_index: int = np.random.randint(0, 4)
+        rng = np.random.default_rng()
+        direction_indices: NDArray = rng.integers(low=0, high=3+1, size=df["sex"].len())
         valid_move, df = self._move_agents(
             old_df = df,
-            direction_index = direction_index
+            direction_indices = direction_indices
         )
 
         self.agents_df = df
