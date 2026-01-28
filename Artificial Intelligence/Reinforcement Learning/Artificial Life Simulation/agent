@@ -39,8 +39,14 @@ class ConfigAgentManager:
     AGENT_MATRIX_ID: int = 1
     # Order: Up, Right, Down, Left
     MOVEMENT_DIRECTIONS: NDArray = field( # Allows to create mutable variables in the dataclass.
-        default_factory=lambda: np.array(
+        default_factory = lambda: np.array(
             ((0, -1), (1, 0), (0, 1), (-1, 0)),
+            dtype = np.int8
+        )
+    )
+    BIRTH_DIRECTIONS: NDArray = field(
+        default_factory = lambda: np.array(
+            ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)),
             dtype = np.int8
         )
     )
@@ -316,8 +322,11 @@ class AgentManager:
 
     def create_agents(
             self,
-            count: int
-    ) -> None:
+            old_df: DataFrame,
+            count: int,
+            x_positions: NDArray | None = None,
+            y_positions: NDArray | None = None
+    ) -> DataFrame:
         #TODO WOO: The order of the attributes in the dictionary.
         # 1. Creates a random number generator instance.
         rng = np.random.default_rng()
@@ -394,35 +403,46 @@ class AgentManager:
         )
 
         # 6. Handles the placement in the agent matrix.
-        # Finds the flat indices of zero elements.
-        zero_indices_flat: NDArray = np.flatnonzero(a=(self.agent_matrix == 0))
+        if (not x_positions) or (not y_positions): # If the positions are not passed as argument to the method.
+            # Finds the flat indices of zero elements.
+            zero_indices_flat: NDArray = np.flatnonzero(a=(self.agent_matrix == 0))
 
-        # Checks whether there are enough available spots.
-        if count > len(zero_indices_flat):
-            raise ValueError(
-                f"Can't create {count} agents. Only {len(zero_indices_flat)} empty spots are available!"
+            # Checks whether there are enough available spots.
+            if count > len(zero_indices_flat):
+                raise ValueError(
+                    f"Can't create {count} agents. Only {len(zero_indices_flat)} empty spots are available!"
+                )
+
+            # Randomly chooses from these indices.
+            random_indices_flat: NDArray = np.random.choice(
+                a = zero_indices_flat,
+                size = count,
+                replace = False
             )
 
-        # Randomly chooses from these indices.
-        random_indices_flat: NDArray = np.random.choice(
-            a = zero_indices_flat,
-            size = count,
-            replace = False
-        )
+            # Assigns the choosen indices and x- and y positions.
+            choosen_indices_flat: NDArray = random_indices_flat
+
+            x_positions: NDArray = choosen_indices_flat % self.simulation_size
+            y_positions: NDArray = choosen_indices_flat // self.simulation_size
+
+        else: 
+            # Calculates the choosen indices from the to the method passed positions.
+            choosen_indices_flat: NDArray = y_positions * self.simulation_size + x_positions
 
         # Updates the agent matrix.
         np.put(
             a = self.agent_matrix,
-            ind = random_indices_flat,
+            ind = choosen_indices_flat,
             v = self.config_agent_manager.AGENT_MATRIX_ID
         )
 
         # Adds position columns to the DataFrame.
         new_agents_df = new_agents_df.with_columns(
-            pl.lit(random_indices_flat % self.simulation_size).cast(pl.Int16).alias("x_pos"), # 'lit' converts an array into polars column.
-            pl.lit(random_indices_flat // self.simulation_size).cast(pl.Int16).alias("y_pos"),
-            pl.lit(random_indices_flat % self.simulation_size).cast(pl.Int16).alias("new_x_pos"),
-            pl.lit(random_indices_flat // self.simulation_size).cast(pl.Int16).alias("new_y_pos")
+            pl.lit(x_positions).cast(pl.Int16).alias("x_pos"), # 'lit' converts an array into polars column.
+            pl.lit(y_positions).cast(pl.Int16).alias("y_pos"),
+            pl.lit(x_positions).cast(pl.Int16).alias("new_x_pos"),
+            pl.lit(y_positions).cast(pl.Int16).alias("new_y_pos")
         )
 
         # 7. Updates the agent DataFrame.
@@ -430,7 +450,9 @@ class AgentManager:
         new_agents_df = new_agents_df.select(self.agents_df.columns)
 
         # Concates them together.
-        self.agents_df = pl.concat([self.agents_df, new_agents_df])
+        new_agents_df = pl.concat([old_df, new_agents_df])
+
+        return new_agents_df
 
     def _process_death(
             self,
@@ -534,26 +556,101 @@ class AgentManager:
 
         return new_df
 
+    def __find_empty_neighbours(
+                self,
+                x_positions: NDArray,
+                y_positions: NDArray
+        ) -> tuple[NDArray, NDArray] | None:
+            
+            # 1. Pre-calculate all possible directions (N, 8).
+            # Does Broadcast addition: (N, 1) + (8,) -> (N, 8) -> Flatten.
+            potential_rows = (x_positions[:, None] + self.config_agent_manager.BIRTH_DIRECTIONS [:, 0]).ravel()
+            potential_cols = (y_positions[:, None] + self.config_agent_manager.BIRTH_DIRECTIONS [:, 1]).ravel()
+
+            # 2. Checks out-of-bounds condition by creating a mask.
+            is_inbound_mask = (
+                (potential_rows >= 0) & (potential_rows < self.simulation_size) &
+                (potential_cols >= 0) & (potential_cols < self.simulation_size)
+            )
+
+            valid_rows = potential_rows[is_inbound_mask]
+            valid_cols = potential_cols[is_inbound_mask]
+
+            # 4. Controls, that the coordinates are non-occupied.
+            is_empty_mask = (self.agent_matrix[valid_rows, valid_cols] == 0)
+
+            final_rows = valid_rows[is_empty_mask]
+            final_cols = valid_cols[is_empty_mask]
+
+            if final_rows.size == 0: # If there is no empty neighbor, returns None.
+                return None
+
+            return (final_rows, final_cols)
+
     def _process_gestation(
             self,
             old_df: DataFrame
     ) -> DataFrame:
         cfg: ConfigAgentManager = self.config_agent_manager
+        rng = np.random.default_rng()
 
-        # 1. Updates the gestation timer..
+        # 1. Updates the gestation timer.
         new_df = old_df.with_columns(
-            pl.when(pl.col("is_pregnant"))
-            .then(pl.col("gestation_timer") + 1)
-            .otherwise(pl.col("gestation_timer"))
+            (
+                pl.when(pl.col("is_pregnant"))
+                .then(pl.col("gestation_timer") + 1)
+                .otherwise(pl.col("gestation_timer"))
+            )
+            .alias("gestation_timer")
         )
 
-        """
-        # 2. If the gestation time is met, gives birth.
-        new_df = new_df.with_columns(
-            pl.when((pl.col("gestation_timer")) == (cfg.GESTATION_TIME))
-            .then() #TODO Add birth logic.
+        # 2. If the gestation time is met, first, finds out the positions of the babys.
+        pregnant_agents: DataFrame = old_df.filter(pl.col("gestation_timer") == self.config_agent_manager.GESTATION_TIME)
+
+        # Extracts the parent positions.
+        parent_x_positions: NDArray = pregnant_agents["x_pos"].to_numpy().astype(dtype=np.int16)
+        parent_y_positions: NDArray = pregnant_agents["y_pos"].to_numpy().astype(dtype=np.int16)
+
+        # Sets neighboring cells as new baby positions.
+        neighbour_positions = self.__find_empty_neighbours(
+            x_positions = parent_x_positions,
+            y_positions = parent_y_positions
         )
-        """
+
+        if not neighbour_positions: # If there are non-empty neighborhood cells, returns immediately.
+            return new_df
+        
+        else:
+            neighbour_x_positions, neighbor_y_positions = neighbour_positions
+        
+        # Chooses random positions from the neighboring cells.
+        new_baby_count: int = pregnant_agents.rows
+
+        random_indices: NDArray = rng.choice(
+            a = neighbour_x_positions.size,
+            size = new_baby_count,
+            replace = False
+        )
+
+        baby_x_positions: NDArray = neighbour_x_positions[random_indices]
+        baby_y_positions: NDArray = neighbor_y_positions[random_indices]
+        
+        # 3. Passes those positions to create the babies.
+        new_df = self.create_agents(
+            old_df = new_df,
+            count = new_baby_count,
+            x_positions = baby_x_positions,
+            y_positions = baby_y_positions
+        )
+
+        # 4. Resets the gestation trackers.
+        pregnant_agents = pregnant_agents.with_columns(
+            pl.lit(0).alias("gestation_timer"),
+            pl.lit(False).alias("is_pregnant")
+        )
+
+        # Adds the parents agents back to the dataframe.
+        new_df = pl.concat([pregnant_agents, new_df])
 
         return new_df
 
@@ -585,7 +682,6 @@ class AgentManager:
         )
 
         return new_df
-
 
     def _move_agents(
             self,
