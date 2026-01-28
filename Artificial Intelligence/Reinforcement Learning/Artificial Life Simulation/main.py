@@ -67,7 +67,12 @@ if __name__ == "__main__":
     )
 
     # 5. Creates the starting generation for the simulation.
-    agent_manager.create_agents(count=100)
+    agent_manager.agents_df = agent_manager.create_agents(
+        old_df = agent_manager.agents_df,
+        count = 100,
+        x_positions = None,
+        y_positions = None
+    )
 
     running: bool = True
     while running:
