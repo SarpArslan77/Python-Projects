@@ -25,8 +25,6 @@ from polars import DataFrame
 
 from simulation_resources import ResourceManager
 
-
-# Type alias for clarity
 @dataclass(frozen=True)
 class ConfigAgentManager:
     """
@@ -37,19 +35,28 @@ class ConfigAgentManager:
     # 1. SIMULATION & MATRIX CONSTANTS
     EMPTY_MATRIX_ID: int = 0
     AGENT_MATRIX_ID: int = 1
+
     # Order: Up, Right, Down, Left
-    MOVEMENT_DIRECTIONS: NDArray = field( # Allows to create mutable variables in the dataclass.
-        default_factory = lambda: np.array(
+    MOVEMENT_DIRECTIONS: NDArray = field(
+        default_factory=lambda: np.array(
             ((0, -1), (1, 0), (0, 1), (-1, 0)),
-            dtype = np.int8
+            dtype=np.int8
         )
     )
-    BIRTH_DIRECTIONS: NDArray = field(
-        default_factory = lambda: np.array(
-            ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)),
-            dtype = np.int8
-        )
+
+    VISION_TEMPLATE: NDArray = field(
+        default_factory=lambda: np.column_stack(
+            (
+                np.indices(((4 * 2) + 1, (4 * 2) + 1))[1].flatten() - 4,  # X Values
+                np.indices(((4 * 2) + 1, (4 * 2) + 1))[0].flatten() - 4,  # Y Values
+            )
+        ).astype(np.int8)
     )
+
+    # Derived fields (calculated in __post_init__)
+    VISION_TEMPLATE_X: NDArray = field(init=False)
+    VISION_TEMPLATE_Y: NDArray = field(init=False)
+    NEIGHBOUR_INDICES: NDArray = field(init=False)
 
     # 2. PHYSICAL GENETICS
     MIN_SIZE: int = 1
@@ -78,6 +85,9 @@ class ConfigAgentManager:
     
     VENOM_CHANCE: float = 0.1
     MIMICRY_CHANCE: float = 0.1
+
+    MIN_PREGNANCY_ENERGY: float = 0.1
+    MIN_PREGNANCY_HEALTH: float = 0.1
 
     # 4. BEHAVIORAL GENETICS (Ranges)
     MIN_KINSHIP: float = 0.1
@@ -110,24 +120,23 @@ class ConfigAgentManager:
 
     def __post_init__(self) -> None:
         """
-        Validates all configuration parameters immediately after initialization.
-        Checks match the order of declaration.
+        Validates all configuration parameters and populates derived fields.
         """
         
-        # 1. SIMULATION & MATRIX CONSTANTS Validation 
+        # --- 1. VALIDATION ---
+
+        # A. SIMULATION & MATRIX CONSTANTS Validation 
         if not isinstance(self.EMPTY_MATRIX_ID, int) or not isinstance(self.AGENT_MATRIX_ID, int):
             raise TypeError("Matrix IDs must be integers.")
         if self.EMPTY_MATRIX_ID == self.AGENT_MATRIX_ID:
             raise ValueError(f"EMPTY_MATRIX_ID and AGENT_MATRIX_ID cannot be the same ({self.EMPTY_MATRIX_ID}).")
 
-        if not isinstance(self.MOVEMENT_DIRECTIONS, np.ndarray): # Uses instead of 'NDArray', so it works with 'isinstance' method.
+        if not isinstance(self.MOVEMENT_DIRECTIONS, np.ndarray):
             raise TypeError("MOVEMENT_DIRECTIONS must be a NumPy ndarray.")
         if self.MOVEMENT_DIRECTIONS.shape != (4, 2):
-            raise ValueError(f"MOVEMENT_DIRECTIONS must have a shape of (4, 2), but got {self.MOVEMENT_DIRECTIONS.shape}.")
-        if not np.issubdtype(self.MOVEMENT_DIRECTIONS.dtype, np.integer):
-            raise TypeError(f"MOVEMENT_DIRECTIONS elements must be integers, but got dtype {self.MOVEMENT_DIRECTIONS.dtype}.")
+            raise ValueError(f"MOVEMENT_DIRECTIONS must have shape (4, 2), got {self.MOVEMENT_DIRECTIONS.shape}.")
 
-        # 2. PHYSICAL GENETICS Validation 
+        # B. PHYSICAL GENETICS Validation 
         int_phys_ranges = [
             ("SIZE", self.MIN_SIZE, self.MAX_SIZE),
             ("AGE", self.MIN_AGE, self.MAX_AGE),
@@ -150,12 +159,10 @@ class ConfigAgentManager:
         for name, min_val, max_val in float_phys_ranges:
             if not isinstance(min_val, (float, int)) or not isinstance(max_val, (float, int)):
                 raise TypeError(f"MIN_{name} and MAX_{name} must be numbers.")
-            if min_val < 0:
-                raise ValueError(f"MIN_{name} must be non-negative.")
             if max_val < min_val:
                 raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
 
-        #  3. SURVIVAL GENETICS Validation 
+        # C. SURVIVAL GENETICS Validation 
         float_surv_ranges = [
             ("CHRONOTYPE", self.MIN_CHRONOTYPE, self.MAX_CHRONOTYPE),
             ("PLANT_DIGEST", self.MIN_PLANT_DIGEST, self.MAX_PLANT_DIGEST),
@@ -164,19 +171,15 @@ class ConfigAgentManager:
         for name, min_val, max_val in float_surv_ranges:
             if not isinstance(min_val, (float, int)) or not isinstance(max_val, (float, int)):
                 raise TypeError(f"MIN_{name} and MAX_{name} must be numbers.")
-            if min_val < 0:
-                raise ValueError(f"MIN_{name} must be non-negative.")
             if max_val < min_val:
                 raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
 
         probs = [("VENOM_CHANCE", self.VENOM_CHANCE), ("MIMICRY_CHANCE", self.MIMICRY_CHANCE)]
         for name, val in probs:
-            if not isinstance(val, (float, int)):
-                raise TypeError(f"{name} must be a number.")
             if not (0.0 <= val <= 1.0):
                 raise ValueError(f"{name} must be between 0.0 and 1.0.")
 
-        #  4. BEHAVIORAL GENETICS Validation 
+        # D. BEHAVIORAL GENETICS Validation 
         float_behav_ranges = [
             ("KINSHIP", self.MIN_KINSHIP, self.MAX_KINSHIP),
             ("PARENTAL", self.MIN_PARENTAL, self.MAX_PARENTAL),
@@ -186,12 +189,10 @@ class ConfigAgentManager:
         for name, min_val, max_val in float_behav_ranges:
             if not isinstance(min_val, (float, int)) or not isinstance(max_val, (float, int)):
                 raise TypeError(f"MIN_{name} and MAX_{name} must be numbers.")
-            if min_val < 0:
-                raise ValueError(f"MIN_{name} must be non-negative.")
             if max_val < min_val:
                 raise ValueError(f"MAX_{name} ({max_val}) cannot be smaller than MIN_{name} ({min_val}).")
 
-        #  5. METABOLISM & MULTIPLIERS Validation 
+        # E. METABOLISM & MULTIPLIERS Validation 
         multipliers = [
             ("BIRTH_ENERGY_FACTOR", self.BIRTH_ENERGY_FACTOR),
             ("METABOLISM_INFECTED_MULT", self.METABOLISM_INFECTED_MULT),
@@ -202,33 +203,47 @@ class ConfigAgentManager:
             ("METABOLISM_TEMP_HARSHNESS", self.METABOLISM_TEMP_HARSHNESS),
         ]
         for name, val in multipliers:
-            if not isinstance(val, (float, int)):
-                raise TypeError(f"{name} must be a number.")
             if val < 0:
                 raise ValueError(f"{name} must be non-negative.")
 
-        #  6. COSTS & PENALTIES Validation 
+        # F. COSTS & PENALTIES Validation 
         costs = [
             ("MOVE_ENERGY_COST", self.MOVE_ENERGY_COST),
             ("DISEASE_HEALTH_COST", self.DISEASE_HEALTH_COST),
             ("BLEEDING_HEALTH_COST", self.BLEEDING_HEALTH_COST),
         ]
         for name, val in costs:
-            if not isinstance(val, int):
-                raise TypeError(f"{name} must be an integer.")
-            if val < 0:
-                raise ValueError(f"{name} must be non-negative.")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError(f"{name} must be a non-negative integer.")
 
-        #  7. TIMERS & CAPACITIES Validation 
+        # G. TIMERS & CAPACITIES Validation 
         timers = [
             ("GESTATION_TIME", self.GESTATION_TIME),
             ("MAX_WASTE_CAPACITY", self.MAX_WASTE_CAPACITY),
         ]
         for name, val in timers:
-            if not isinstance(val, int):
-                raise TypeError(f"{name} must be an integer.")
-            if val < 0:
-                raise ValueError(f"{name} must be non-negative.")
+            if not isinstance(val, int) or val < 0:
+                raise ValueError(f"{name} must be a non-negative integer.")
+
+        # --- 2. POPULATE DERIVED FIELDS ---
+        # Using object.__setattr__ because the dataclass is frozen.
+        
+        # Split Vision Template into X and Y components
+        object.__setattr__(self, "VISION_TEMPLATE_X", self.VISION_TEMPLATE[:, 0])
+        object.__setattr__(self, "VISION_TEMPLATE_Y", self.VISION_TEMPLATE[:, 1])
+
+        # Identify indices that constitute the immediate neighborhood (3x3 area excluding center).
+        neighbour_mask = (
+            (np.abs(self.VISION_TEMPLATE_X) <= 1) &
+            (np.abs(self.VISION_TEMPLATE_Y) <= 1) &
+            ~((self.VISION_TEMPLATE_X == 0) & (self.VISION_TEMPLATE_Y == 0))
+        )
+
+        object.__setattr__(
+            self,
+            "NEIGHBOUR_INDICES",
+            np.where(neighbour_mask)[0]
+        )
 
 class AgentManager:
 
@@ -246,7 +261,7 @@ class AgentManager:
         # 2. Creates agent matrix.
         self.agent_matrix: NDArray = np.zeros(
             shape = (self.simulation_size, self.simulation_size),
-            dtype = np.uint8
+            dtype = np.float16
         )
 
         # 3. Creates a agent DataFrame.
@@ -387,23 +402,21 @@ class AgentManager:
         # 3. Creates the DataFrame.
         new_agents_df = DataFrame(data=agent_data)
 
-        # 4. Creates columns for the attributes, that have starting values.
+        # 4. Adds new columns.
         new_agents_df = new_agents_df.with_columns(
+            # Creates columns for the attributes, that have starting values.
             (pl.col("max_health").cast(pl.Float32).alias("health")), # Gets the reference to the column.
             (pl.col("max_energy") * self.config_agent_manager.BIRTH_ENERGY_FACTOR).cast(pl.Float32).alias("energy"),  # Name of the added attribute.
             (pl.col("resistance").cast(pl.Float32).alias("effective_resistance")),
-            (pl.col("base_energy_burn_rate").cast(pl.Float32).alias("total_energy_burn_rate"))
-        )
-
-        # 5. Adds derived color columns.
-        new_agents_df = new_agents_df.with_columns(
+            (pl.col("base_energy_burn_rate").cast(pl.Float32).alias("total_energy_burn_rate")),
+            # Adds derived color columns
             (pl.col("meat_digestion_efficiency") * 255).cast(pl.UInt8).alias("color_r"),
             (pl.col("plant_digestion_efficiency") * 255).cast(pl.UInt8).alias("color_g"),
             (pl.col("size") * 85).cast(pl.UInt8).alias("color_b") # (Size 1, 2, 3 -> 85, 170, 255).
         )
 
         # 6. Handles the placement in the agent matrix.
-        if (not x_positions) or (not y_positions): # If the positions are not passed as argument to the method.
+        if (x_positions is None) or (y_positions is None): # If the positions are not passed as argument to the method.
             # Finds the flat indices of zero elements.
             zero_indices_flat: NDArray = np.flatnonzero(a=(self.agent_matrix == 0))
 
@@ -453,6 +466,49 @@ class AgentManager:
         new_agents_df = pl.concat([old_df, new_agents_df])
 
         return new_agents_df
+
+    def _extract_vision_grid(
+            self,
+            old_df: DataFrame
+    ) -> tuple[NDArray, NDArray, NDArray, NDArray, NDArray]:
+        # 1. Creates all the grids, that cells see.
+        # Extracts the all cell positions.
+        cells_x: NDArray = old_df["x_pos"].to_numpy().astype(dtype=np.int16)
+        cells_y: NDArray = old_df["y_pos"].to_numpy().astype(dtype=np.int16)
+
+        # Adds all the vision positions to the agent positions.
+        vision_grids_x: NDArray = cells_x[:, None] + self.config_agent_manager.VISION_TEMPLATE_X
+        vision_grids_y: NDArray = cells_y[:, None] + self.config_agent_manager.VISION_TEMPLATE_Y
+
+        # 2. Creates a boolean mask to filter the valid positions.
+        in_bounds_mask: NDArray = (
+            (vision_grids_x >= 0) &
+            (vision_grids_x < self.simulation_size) &
+            (vision_grids_y >= 0) &
+            (vision_grids_y < self.simulation_size)
+        )
+
+        # Filters inbound positions.
+        inbound_x: NDArray = np.where(in_bounds_mask, vision_grids_x, 0) 
+        inbound_y: NDArray = np.where(in_bounds_mask, vision_grids_y, 0)
+
+        # 3. Finds out, whether there are any cells or resources on the vision grids.
+        vision_cells: NDArray = self.agent_matrix[inbound_y, inbound_x]
+        
+        vision_corpses: NDArray = self.resource_manager.corpse_matrix[inbound_y, inbound_x]
+        vision_foods: NDArray = self.resource_manager.food_matrix[inbound_y, inbound_x]
+        vision_wastes: NDArray = self.resource_manager.waste_matrix[inbound_y, inbound_x]
+        vision_roots: NDArray = self.resource_manager.root_matrix[inbound_y, inbound_x]
+
+        # 4. Whereever the mask is false, a.k.a. a border is met, turn the value into '-1'.
+        vision_cells[~in_bounds_mask] = -1
+
+        vision_corpses[~in_bounds_mask] = -1
+        vision_foods[~in_bounds_mask] = -1
+        vision_wastes[~in_bounds_mask] = -1
+        vision_roots[~in_bounds_mask] = -1
+
+        return vision_cells, vision_corpses, vision_foods, vision_wastes, vision_roots
 
     def _process_death(
             self,
@@ -506,23 +562,27 @@ class AgentManager:
                 .then(cfg.METABOLISM_HIBERNATING_MULT)
                 .otherwise(1.0)
             )
+            .cast(pl.Float32)
             .alias("metabolism_modifier")
         )
 
         # 2. Calculates the total burn rate depending on base burn rate, metabolism modifier, size and temperature and deducts it from the current energy.
         new_df = new_df.with_columns(
             (pl.col("base_energy_burn_rate") * pl.col("metabolism_modifier") * pl.col("size")) + ((map_temperature - pl.col("optimal_temperature").abs()) * cfg.METABOLISM_TEMP_HARSHNESS * (pl.lit(1.0) - pl.col("effective_resistance")))
+            .cast(pl.Float32)
             .alias("total_energy_burn_rate")
         )
 
         new_df = new_df.with_columns(
             (pl.col("energy") - pl.col("total_energy_burn_rate"))
+            .cast(pl.Float32)
             .alias("energy")
         )
 
         # 3. Adds a portion of total energy burn rate to the waste accumulation.
         new_df = new_df.with_columns(
             (pl.col("waste_accumulated") + pl.col("total_energy_burn_rate") * cfg.WASTE_PORTION)
+            .cast(pl.Float32)
             .alias("waste_accumulated")
         )
 
@@ -545,112 +605,206 @@ class AgentManager:
                 .then(cfg.BLEEDING_HEALTH_COST)
                 .otherwise(0)
             )
+            .cast(pl.Float32)
             .alias("health_cost")
         )
 
         # 2. Deducts the health cost from the current health.
         new_df = new_df.with_columns(
             (pl.col("health") - pl.col("health_cost"))
+            .cast(pl.Float32)
             .alias("health")
         )
 
         return new_df
 
-    def __find_empty_neighbours(
-                self,
-                x_positions: NDArray,
-                y_positions: NDArray
-        ) -> tuple[NDArray, NDArray] | None:
-            
-            # 1. Pre-calculate all possible directions (N, 8).
-            # Does Broadcast addition: (N, 1) + (8,) -> (N, 8) -> Flatten.
-            potential_rows = (x_positions[:, None] + self.config_agent_manager.BIRTH_DIRECTIONS [:, 0]).ravel()
-            potential_cols = (y_positions[:, None] + self.config_agent_manager.BIRTH_DIRECTIONS [:, 1]).ravel()
+    def _find_neighbours(
+            self,
+            mother_visions: NDArray,
+            mother_x: NDArray,
+            mother_y: NDArray
+    ) -> tuple[NDArray, NDArray, NDArray]:
+        
+        # Abbreviations:
+        # number of mothers = M.
+        # count of succesful births = S.
+    
+        cfg = self.config_agent_manager
+        rng = np.random.default_rng()
 
-            # 2. Checks out-of-bounds condition by creating a mask.
-            is_inbound_mask = (
-                (potential_rows >= 0) & (potential_rows < self.simulation_size) &
-                (potential_cols >= 0) & (potential_cols < self.simulation_size)
+        # 1. Looks only at the 8 neighbor columns within the vision slice.
+        neighbour_cells: NDArray = mother_visions[:, cfg.NEIGHBOUR_INDICES] # (M, 8).
+
+        # 2. Creates a mask of empty spots.
+        empty_mask: NDArray = (neighbour_cells == cfg.EMPTY_MATRIX_ID) # (M, 8).
+
+        # 3. Checks which mothers have at least one empty neighbour.
+        has_spot_mask: NDArray = np.any(empty_mask, axis=1) # (M,)
+
+        if not np.any(has_spot_mask):
+            return (
+                np.array([], dtype=np.int16),
+                np.array([], dtype=np.int16),
+                has_spot_mask
+            )
+        
+        # 4. Random cell selection.
+        # Assigns a random value to every empty spot and 0 to occupied spots.
+        random_scores: NDArray = rng.random(empty_mask.shape) * empty_mask # (M, 8).
+        # Take the argmax to find a random empty spot.
+        chosen_indices: NDArray = np.argmax(random_scores, axis=1) # Finds the index of the highest value in each row (axis=1) and (M,). 
+
+        # 5. Maps indices (0-7) indices back to VISION_TEMPLATE indices.
+        chosen_template_indices: NDArray = cfg.NEIGHBOUR_INDICES[chosen_indices] # (M,).
+
+        # 6. Calculates coordinates for the babies.
+        baby_x: NDArray = mother_x[has_spot_mask] + cfg.VISION_TEMPLATE_X[chosen_template_indices[has_spot_mask]] # (S,).
+        baby_y: NDArray = mother_y[has_spot_mask] + cfg.VISION_TEMPLATE_Y[chosen_template_indices[has_spot_mask]] # (S,).
+
+        return (baby_x.astype(np.int16), baby_y.astype(np.int16), has_spot_mask)
+
+    def _attempt_reproduction(
+                self,
+                old_df: DataFrame,
+                cell_visions: NDArray
+        ) -> DataFrame:
+            cfg: ConfigAgentManager = self.config_agent_manager
+
+            # 1. Filters the cells, that has the correct attributes to be mothers.
+            is_possible_mother_mask: NDArray = (
+                    (old_df["sex"] == 1) & # If female.
+                    (old_df["is_pregnant"] == False) & # If not already pregnant.
+                    (old_df["age"] > (old_df["max_age"] // 2)) & # If reached maturity.
+                    (old_df["energy"] > (old_df["max_energy"] * cfg.MIN_PREGNANCY_ENERGY)) & # If has enough energy.
+                    (old_df["health"] > (old_df["max_health"] * cfg.MIN_PREGNANCY_HEALTH)) # If has enough health.
             )
 
-            valid_rows = potential_rows[is_inbound_mask]
-            valid_cols = potential_cols[is_inbound_mask]
+            # 2. Filters the cells, which have neighbours.
+            neighbour_counts: NDArray = cell_visions.sum(
+                axis = 1, # Horizontal summation.
+                dtype = np.uint8
+            )
 
-            # 4. Controls, that the coordinates are non-occupied.
-            is_empty_mask = (self.agent_matrix[valid_rows, valid_cols] == 0)
+            has_neighbour_mask: NDArray = pl.Series(neighbour_counts > 1) # Converts the array mask into dataframe mask.
 
-            final_rows = valid_rows[is_empty_mask]
-            final_cols = valid_cols[is_empty_mask]
+            # 3. Final lists of agents, which can succesfully reproduce.
+            final_mask: NDArray = is_possible_mother_mask & has_neighbour_mask
 
-            if final_rows.size == 0: # If there is no empty neighbor, returns None.
-                return None
+            # 4. Updates the old data frame with the new pregnant cells.
+            new_df: DataFrame = old_df.with_columns(
+                pl.when(final_mask)
+                .then(pl.lit(True))
+                .otherwise(pl.col("is_pregnant"))
+                .cast(pl.Boolean)
+                .alias("is_pregnant")
+            )
 
-            return (final_rows, final_cols)
+            return new_df
 
-    def _process_gestation(
+    def _update_pregnancy_status(
             self,
             old_df: DataFrame
     ) -> DataFrame:
-        cfg: ConfigAgentManager = self.config_agent_manager
-        rng = np.random.default_rng()
 
-        # 1. Updates the gestation timer.
+        # 1. Checks for miscarriage.
         new_df = old_df.with_columns(
+            pl.when(
+                (pl.col("is_pregnant")) & 
+                (
+                    (pl.col("energy") < (pl.col("max_energy") * self.config_agent_manager.MIN_PREGNANCY_ENERGY)) |
+                    (pl.col("health") < (pl.col("max_health") * self.config_agent_manager.MIN_PREGNANCY_HEALTH))
+                )
+            )
+            .then(pl.lit(False))
+            .otherwise(pl.col("is_pregnant"))
+            .cast(pl.Boolean)
+            .alias("is_pregnant")
+        )
+
+        # 2. Updates the gestation timer.
+        new_df: DataFrame = new_df.with_columns(
             (
                 pl.when(pl.col("is_pregnant"))
                 .then(pl.col("gestation_timer") + 1)
                 .otherwise(pl.col("gestation_timer"))
             )
+            .cast(pl.UInt8)
             .alias("gestation_timer")
         )
 
-        # 2. If the gestation time is met, first, finds out the positions of the babys.
-        pregnant_agents: DataFrame = old_df.filter(pl.col("gestation_timer") == self.config_agent_manager.GESTATION_TIME)
+        return new_df
 
-        # Extracts the parent positions.
-        parent_x_positions: NDArray = pregnant_agents["x_pos"].to_numpy().astype(dtype=np.int16)
-        parent_y_positions: NDArray = pregnant_agents["y_pos"].to_numpy().astype(dtype=np.int16)
+    def _give_birth(
+            self,
+            old_df: DataFrame,
+            cell_visions: NDArray
+    ) -> DataFrame:
+        cfg = self.config_agent_manager
 
-        # Sets neighboring cells as new baby positions.
-        neighbour_positions = self.__find_empty_neighbours(
-            x_positions = parent_x_positions,
-            y_positions = parent_y_positions
+        # 1. Identifies mothers at the end of gestation.
+        is_ready_mask: DataFrame = (old_df["gestation_timer"] >= cfg.GESTATION_TIME)
+        ready_indices: NDArray = np.where(is_ready_mask.to_numpy())[0] #TODO AC
+
+        if ready_indices.size == 0:
+            return old_df
+        
+        # 2. Extracts their vision and positions.
+        mother_visions: NDArray = cell_visions[ready_indices]
+        mother_x: NDArray = old_df.filter(is_ready_mask)["x_pos"].to_numpy()
+        mother_y: NDArray = old_df.filter(is_ready_mask)["y_pos"].to_numpy()
+
+        # 3. Finds birth spots.
+        baby_x, baby_y, success_mask = self._find_neighbours(
+            mother_visions = mother_visions,
+            mother_x = mother_x,
+            mother_y = mother_y
         )
 
-        if not neighbour_positions: # If there are non-empty neighborhood cells, returns immediately.
-            return new_df
-        
-        else:
-            neighbour_x_positions, neighbor_y_positions = neighbour_positions
-        
-        # Chooses random positions from the neighboring cells.
-        new_baby_count: int = pregnant_agents.rows
+        # 4. Resets pregnancy for all mothers who reached term.
+        new_df: DataFrame = old_df.with_columns(
+            pl.when(is_ready_mask)
+            .then(pl.lit(0))
+            .otherwise(pl.col("gestation_timer"))
+            .alias("gestation_timer"),
 
-        random_indices: NDArray = rng.choice(
-            a = neighbour_x_positions.size,
-            size = new_baby_count,
-            replace = False
+            pl.when(is_ready_mask)
+            .then(pl.lit(False))
+            .otherwise(pl.col("is_pregnant"))
+            .alias("is_pregnant")
         )
 
-        baby_x_positions: NDArray = neighbour_x_positions[random_indices]
-        baby_y_positions: NDArray = neighbor_y_positions[random_indices]
-        
-        # 3. Passes those positions to create the babies.
-        new_df = self.create_agents(
+        # 5. Creates the new babies.
+        if baby_x.size > 0:
+            new_df = self.create_agents(
+                old_df = new_df,
+                count = baby_x.size,
+                x_positions = baby_x,
+                y_positions = baby_y
+            )
+
+        return new_df
+
+    def _process_gestation(
+                self,
+                old_df: DataFrame,
+                cell_visions: NDArray
+    ) -> DataFrame:
+        cfg: ConfigAgentManager = self.config_agent_manager
+
+        # 1. Attempts to reproduce.
+        new_df: DataFrame = self._attempt_reproduction(
+            old_df = old_df,
+            cell_visions = cell_visions
+        )
+
+        # 2. Updates the pregnancy status.
+        new_df = self._update_pregnancy_status(old_df=new_df)
+
+        # 3. Gives birth.
+        new_df = self._give_birth(
             old_df = new_df,
-            count = new_baby_count,
-            x_positions = baby_x_positions,
-            y_positions = baby_y_positions
+            cell_visions = cell_visions
         )
-
-        # 4. Resets the gestation trackers.
-        pregnant_agents = pregnant_agents.with_columns(
-            pl.lit(0).alias("gestation_timer"),
-            pl.lit(False).alias("is_pregnant")
-        )
-
-        # Adds the parents agents back to the dataframe.
-        new_df = pl.concat([pregnant_agents, new_df])
 
         return new_df
 
@@ -789,6 +943,7 @@ class AgentManager:
             pl.when((pl.col("age")) > (pl.col("max_age") // 2)) # If the age threshold is met.
             .then((1.0 - ((pl.col("age") - pl.col("max_age") // 2) / (pl.col("max_age") - pl.col("max_age") // 2)) ** 2).clip(lower_bound=0.1))
             .otherwise(1.0)
+            .cast(pl.Float32)
             .alias("effective_resistance")
         )
 
@@ -799,19 +954,25 @@ class AgentManager:
         )
 
         # 5. Handles the disease, bleeding, gestation and waste accumulation states.
-        # 5. Handles the vital states such as infected or bleeding.
         df = self._process_vital_states(old_df=df)
 
-        # 6. Handles the gestation.
-        df = self._process_gestation(old_df=df)
+        # 6. Calculates the observeble vision grids.
+        cell_visions, corpse_visions, food_visions, waste_visions, root_visions = self._extract_vision_grid(old_df = df)
 
-        # 7. Handles the waste accumulation.
+        # 7. Handles the gestation.
+        df = self._process_gestation(
+            old_df = df,
+            cell_visions = cell_visions
+        )
+
+        # 8. Handles the waste accumulation.
         df = self._process_waste_accumulation(old_df=df)
 
-        # 8. Updates the agents dataframe.
+        # 9. Updates the agents dataframe.
         self.agents_df = df
 
         # B. TAKEN ACTIONS.
+
         # 1. Moves the agents.
         #! TESTING
         rng = np.random.default_rng()
@@ -823,5 +984,5 @@ class AgentManager:
 
         self.agents_df = df
 
-    def get_agent_state(self) -> DataFrame:
+    def get_agent_dataframe(self) -> DataFrame:
         return self.agents_df
